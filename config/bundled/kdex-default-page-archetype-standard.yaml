@@ -30,6 +30,11 @@ spec:
             [[ $content ]]
           </template>
         [[- end -]]
+        <template id="content-404">
+          <h1>404</h1>
+          <p>Page not found</p>
+          <a href="[[ .BasePath ]]">Back to home</a>
+        </template>
 
         [[/* render any remaining slots in the Navigation map as HTML templates */]]
         [[- range $slot, $content := .Navigation ]]
