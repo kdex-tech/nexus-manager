@@ -18,8 +18,7 @@ spec:
         [[ pop .Navigation "main" ]]
         <main>
           <div data-viewport="main">
-            [[/* use 'pop' to both render a slot in place and remove it from the Content map */]]
-            [[ pop .Content "main" ]]
+            [[ .Content.main ]]
           </div>
         </main>
         [[ .Footer ]]
@@ -31,7 +30,6 @@ spec:
             [[ $content ]]
           </template>
         [[- end -]]
-        <template id="swapped-content"></template>
 
         [[/* render any remaining slots in the Navigation map as HTML templates */]]
         [[- range $slot, $content := .Navigation ]]
