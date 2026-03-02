@@ -116,28 +116,5 @@ metadata:
   namespace: system
 data:
   config.yaml: |
-    backendDefault:
-      serverImage: ghcr.io/kdex-tech/backend-static:latest
-
-    defaultImageRegistry:
-      host: registry.kube-system.svc.cluster.local:5000
-      insecure: true
-
-    defaultNpmRegistry:
-      host: npm.test
-      insecure: true
-
-    hostDefault:
-      deployment:
-        template:
-          spec:
-            containers:
-            - image: registry.kube-system.svc.cluster.local:5000/kdex-tech/kdex-host:latest
-              imagePullPolicy: Always
-      roleRef:
-        apiGroup: rbac.authorization.k8s.io
-        kind: ClusterRole
-        name: kdex-nexus-host-controller-role
-
-    packageBuilder:
-      image: ghcr.io/kdex-tech/cli-tools:latest
+    # Default configuration for KDex Nexus Manager
+    # leave blank to use the default configuration
