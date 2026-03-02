@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -147,7 +148,7 @@ var _ = Describe("KDexApp Controller", func() {
 					},
 					PackageReference: kdexv1alpha1.PackageReference{
 						Name: "@my-scope/my-package",
-						SecretRef: &corev1.LocalObjectReference{
+						SecretRef: &kdexv1alpha1.KDexObjectReference{
 							Name: "non-existent-secret",
 						},
 						Version: "1.0.0",
@@ -177,7 +178,7 @@ var _ = Describe("KDexApp Controller", func() {
 					},
 					PackageReference: kdexv1alpha1.PackageReference{
 						Name: "@my-scope/my-package",
-						SecretRef: &corev1.LocalObjectReference{
+						SecretRef: &kdexv1alpha1.KDexObjectReference{
 							Name: "existent-secret",
 						},
 						Version: "1.0.0",
@@ -194,14 +195,13 @@ var _ = Describe("KDexApp Controller", func() {
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						"kdex.dev/npm-server-address": "https://registry.npmjs.org",
+						"kdex.dev/secret-type": "npm",
 					},
 					Name:      "existent-secret",
 					Namespace: namespace,
 				},
 				Data: map[string][]byte{
-					"username": []byte("username"),
-					"password": []byte("password"),
+					".npmrc": []byte("//registry.npmjs.org/:_auth=" + base64.StdEncoding.EncodeToString([]byte("username:password"))),
 				},
 			}
 

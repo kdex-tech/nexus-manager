@@ -31,12 +31,14 @@ func (v *KDexAppValidator[T]) ValidateDelete(ctx context.Context, obj T) (admiss
 }
 
 func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+	clusterScoped := false
 	var spec *kdexv1alpha1.KDexAppSpec
 
 	switch t := any(obj).(type) {
 	case *kdexv1alpha1.KDexApp:
 		spec = &t.Spec
 	case *kdexv1alpha1.KDexClusterApp:
+		clusterScoped = true
 		spec = &t.Spec
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", t)
@@ -47,6 +49,14 @@ func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) (admission.Warn
 		Backend:          spec.Backend,
 		PackageReference: &spec.PackageReference,
 		Scripts:          spec.Scripts,
+	}
+
+	if spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Name == "" {
+		return nil, fmt.Errorf("spec.packageReference.secretRef.name is required")
+	}
+
+	if clusterScoped && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Namespace == "" {
+		return nil, fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped apps")
 	}
 
 	if err := validation.ValidateScriptLibrary(sl); err != nil {

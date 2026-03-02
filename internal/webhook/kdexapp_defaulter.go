@@ -31,6 +31,10 @@ func (a *KDexAppDefaulter[T]) Default(ctx context.Context, obj T) error {
 
 	spec.IngressPath = "/-/a/" + name
 
+	if spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Kind == "" {
+		spec.PackageReference.SecretRef.Kind = "Secret"
+	}
+
 	BackendDefaults(&spec.Backend)
 
 	return nil

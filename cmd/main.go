@@ -207,22 +207,21 @@ func main() {
 
 	registryLog := logger.WithName("npm-registry")
 
-	registryFactory := func(registry string, secret *corev1.Secret) (npm.Registry, error) {
+	packageValidatorFactory := func(registry string, secret *corev1.Secret) (npm.PackageValidator, error) {
 		reg, err := npm.NewRegistry(registry, secret)
 		if err == nil {
 			return reg, nil
 		}
-		registryLog.V(2).Info("using default registry", "requested", registry, "default", conf.DefaultNpmRegistry.Host)
-		return &npm.RegistryImpl{
-			Config: &conf.DefaultNpmRegistry,
-		}, nil
+		registryLog.V(2).Info("using default registry", "requested", registry, "default", conf.DefaultNpmRegistry)
+		return npm.NewRegistry(conf.DefaultNpmRegistry, secret)
 	}
 
 	if err := (&controller.KDexAppReconciler{
-		Client:          mgr.GetClient(),
-		RegistryFactory: registryFactory,
-		RequeueDelay:    requeueDelay,
-		Scheme:          mgr.GetScheme(),
+		Client:                  mgr.GetClient(),
+		Configuration:           conf,
+		PackageValidatorFactory: packageValidatorFactory,
+		RequeueDelay:            requeueDelay,
+		Scheme:                  mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KDexApp")
 		os.Exit(1)
@@ -269,10 +268,11 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.KDexScriptLibraryReconciler{
-		Client:          mgr.GetClient(),
-		RegistryFactory: registryFactory,
-		RequeueDelay:    requeueDelay,
-		Scheme:          mgr.GetScheme(),
+		Client:                  mgr.GetClient(),
+		Configuration:           conf,
+		PackageValidatorFactory: packageValidatorFactory,
+		RequeueDelay:            requeueDelay,
+		Scheme:                  mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KDexScriptLibrary")
 		os.Exit(1)

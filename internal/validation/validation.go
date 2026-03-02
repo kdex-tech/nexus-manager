@@ -15,14 +15,20 @@ import (
 func ValidatePackageReference(
 	packageReference *kdexv1alpha1.PackageReference,
 	secret *corev1.Secret,
-	registryFactory npm.RegistryFactory,
+	packageValidatorFactory npm.PackageValidatorFactory,
+	defaultRegistry string,
 ) error {
-	registry, err := registryFactory(packageReference.Registry, secret)
+	registry := packageReference.Registry
+	if registry == "" {
+		registry = defaultRegistry
+	}
+
+	validator, err := packageValidatorFactory(registry, secret)
 	if err != nil {
 		return err
 	}
 
-	return registry.ValidatePackage(
+	return validator.ValidatePackage(
 		packageReference.Name,
 		packageReference.Version,
 	)

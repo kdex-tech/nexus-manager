@@ -123,7 +123,7 @@ var _ = Describe("KDexScriptLibrary Controller", func() {
 				Spec: kdexv1alpha1.KDexScriptLibrarySpec{
 					PackageReference: &kdexv1alpha1.PackageReference{
 						Name: "@my-scope/my-package",
-						SecretRef: &corev1.LocalObjectReference{
+						SecretRef: &kdexv1alpha1.KDexObjectReference{
 							Name: "non-existent-secret",
 						},
 						Version: "1.0.0",
@@ -147,7 +147,7 @@ var _ = Describe("KDexScriptLibrary Controller", func() {
 				Spec: kdexv1alpha1.KDexScriptLibrarySpec{
 					PackageReference: &kdexv1alpha1.PackageReference{
 						Name: "@my-scope/my-package",
-						SecretRef: &corev1.LocalObjectReference{
+						SecretRef: &kdexv1alpha1.KDexObjectReference{
 							Name: "non-existent-secret",
 						},
 						Version: "1.0.0",
@@ -164,7 +164,7 @@ var _ = Describe("KDexScriptLibrary Controller", func() {
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						"kdex.dev/npm-server-address": "https://registry.npmjs.org",
+						"kdex.dev/secret-type": "npm",
 					},
 					Name:      "non-existent-secret",
 					Namespace: namespace,

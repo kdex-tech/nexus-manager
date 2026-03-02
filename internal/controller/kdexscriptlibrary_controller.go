@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"kdex.dev/crds/configuration"
 	"kdex.dev/crds/npm"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,9 +42,10 @@ import (
 // KDexScriptLibraryReconciler reconciles a KDexScriptLibrary object
 type KDexScriptLibraryReconciler struct {
 	client.Client
-	RegistryFactory npm.RegistryFactory
-	RequeueDelay    time.Duration
-	Scheme          *runtime.Scheme
+	Configuration           configuration.NexusConfiguration
+	PackageValidatorFactory npm.PackageValidatorFactory
+	RequeueDelay            time.Duration
+	Scheme                  *runtime.Scheme
 }
 
 func (r *KDexScriptLibraryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
@@ -115,7 +117,7 @@ func (r *KDexScriptLibraryReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			attempts = 1
 		}
 
-		if err := validation.ValidatePackageReference(spec.PackageReference, secret, r.RegistryFactory); err != nil {
+		if err := validation.ValidatePackageReference(spec.PackageReference, secret, r.PackageValidatorFactory, r.Configuration.DefaultNpmRegistry); err != nil {
 			kdexv1alpha1.SetConditions(
 				&status.Conditions,
 				kdexv1alpha1.ConditionStatuses{

@@ -48,14 +48,12 @@ func (a *KDexHostDefaulter[T]) Default(ctx context.Context, obj T) error {
 		spec.ScriptLibraryRef.Kind = KDexScriptLibrary
 	}
 
-	if spec.Registries.ImageRegistry.Host == "" {
-		spec.Registries.ImageRegistry.Host = a.Configuration.DefaultImageRegistry.Host
-		spec.Registries.ImageRegistry.Insecure = a.Configuration.DefaultImageRegistry.InSecure
+	if spec.Registries.ImageRegistry == "" {
+		spec.Registries.ImageRegistry = a.Configuration.DefaultImageRegistry
 	}
 
-	if spec.Registries.NpmRegistry.Host == "" {
-		spec.Registries.NpmRegistry.Host = a.Configuration.DefaultNpmRegistry.Host
-		spec.Registries.NpmRegistry.Insecure = a.Configuration.DefaultNpmRegistry.InSecure
+	if spec.Registries.NpmRegistry == "" {
+		spec.Registries.NpmRegistry = a.Configuration.DefaultNpmRegistry
 	}
 
 	if spec.UtilityPages == nil {

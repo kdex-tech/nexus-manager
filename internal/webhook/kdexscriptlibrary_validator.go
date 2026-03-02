@@ -31,15 +31,25 @@ func (v *KDexScriptLibraryValidator[T]) ValidateDelete(ctx context.Context, obj 
 }
 
 func (v *KDexScriptLibraryValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+	clusterScoped := false
 	var spec *kdexv1alpha1.KDexScriptLibrarySpec
 
 	switch t := any(obj).(type) {
 	case *kdexv1alpha1.KDexScriptLibrary:
 		spec = &t.Spec
 	case *kdexv1alpha1.KDexClusterScriptLibrary:
+		clusterScoped = true
 		spec = &t.Spec
 	default:
 		return nil, fmt.Errorf("unsupported type: %T", t)
+	}
+
+	if spec.PackageReference != nil && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Name == "" {
+		return nil, fmt.Errorf("spec.packageReference.secretRef.name is required")
+	}
+
+	if clusterScoped && spec.PackageReference != nil && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Namespace == "" {
+		return nil, fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped script libraries")
 	}
 
 	if err := validation.ValidateScriptLibrary(spec); err != nil {

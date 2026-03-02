@@ -273,18 +273,34 @@ func ResolveSecret(
 	c client.Client,
 	object client.Object,
 	objectConditions *[]metav1.Condition,
-	secretRef *corev1.LocalObjectReference,
+	secretRef any,
 	requeueDelay time.Duration,
 ) (*corev1.Secret, bool, ctrl.Result, error) {
-	if secretRef == nil {
+	if reflect.ValueOf(secretRef).IsNil() {
 		return nil, false, ctrl.Result{}, nil
 	}
 
-	var secret corev1.Secret
-	secretName := types.NamespacedName{
-		Name:      secretRef.Name,
-		Namespace: object.GetNamespace(),
+	var secretName types.NamespacedName
+	switch v := secretRef.(type) {
+	case *corev1.LocalObjectReference:
+		secretName = types.NamespacedName{
+			Name:      v.Name,
+			Namespace: object.GetNamespace(),
+		}
+	case *kdexv1alpha1.KDexObjectReference:
+		namespace := object.GetNamespace()
+		if v.Namespace != "" {
+			namespace = v.Namespace
+		}
+		secretName = types.NamespacedName{
+			Name:      v.Name,
+			Namespace: namespace,
+		}
+	default:
+		return nil, true, ctrl.Result{}, fmt.Errorf("unknown type %T", secretRef)
 	}
+
+	var secret corev1.Secret
 	if err := c.Get(ctx, secretName, &secret); err != nil {
 		if errors.IsNotFound(err) {
 			kdexv1alpha1.SetConditions(

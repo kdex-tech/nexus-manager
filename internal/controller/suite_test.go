@@ -181,7 +181,7 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	registryFactory := func(registry string, secret *corev1.Secret) (npm.Registry, error) {
+	packageValidatorFactory := func(registry string, secret *corev1.Secret) (npm.PackageValidator, error) {
 		return &MockRegistry{}, nil
 	}
 
@@ -190,10 +190,10 @@ var _ = BeforeSuite(func() {
 
 	// App
 	appReconciler := &KDexAppReconciler{
-		Client:          k8sManager.GetClient(),
-		RegistryFactory: registryFactory,
-		RequeueDelay:    0,
-		Scheme:          k8sManager.GetScheme(),
+		Client:                  k8sManager.GetClient(),
+		PackageValidatorFactory: packageValidatorFactory,
+		RequeueDelay:            0,
+		Scheme:                  k8sManager.GetScheme(),
 	}
 	err = appReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
@@ -255,10 +255,10 @@ var _ = BeforeSuite(func() {
 
 	// Script Library
 	scriptLibraryReconciler := &KDexScriptLibraryReconciler{
-		Client:          k8sClient,
-		RegistryFactory: registryFactory,
-		RequeueDelay:    0,
-		Scheme:          k8sClient.Scheme(),
+		Client:                  k8sClient,
+		PackageValidatorFactory: packageValidatorFactory,
+		RequeueDelay:            0,
+		Scheme:                  k8sClient.Scheme(),
 	}
 	err = scriptLibraryReconciler.SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
