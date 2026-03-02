@@ -22,7 +22,8 @@ import (
 )
 
 const (
-	FALSE = "false"
+	FALSE        = "false"
+	MAX_ATTEMPTS = 10
 )
 
 // nolint:gocyclo

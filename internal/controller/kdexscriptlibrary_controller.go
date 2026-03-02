@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/kdex-tech/nexus-manager/internal/validation"
@@ -109,6 +110,11 @@ func (r *KDexScriptLibraryReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			status.Attributes["secret.generation"] = fmt.Sprintf("%d", secret.Generation)
 		}
 
+		attempts, err := strconv.Atoi(status.Attributes["validation.attempts"])
+		if err != nil {
+			attempts = 1
+		}
+
 		if err := validation.ValidatePackageReference(spec.PackageReference, secret, r.RegistryFactory); err != nil {
 			kdexv1alpha1.SetConditions(
 				&status.Conditions,
@@ -120,6 +126,13 @@ func (r *KDexScriptLibraryReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				kdexv1alpha1.ConditionReasonReconcileError,
 				err.Error(),
 			)
+
+			attempts++
+			status.Attributes["validation.attempts"] = strconv.Itoa(attempts)
+
+			if attempts <= MAX_ATTEMPTS {
+				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
+			}
 
 			return ctrl.Result{}, err
 		}
