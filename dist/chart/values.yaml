@@ -4,7 +4,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/kdex-tech/nexus-manager
-      tag: 0.3.4
+      tag: 0.3.5
     imagePullPolicy: IfNotPresent
     args:
     - "--named-log-level=npm-registry=2"
