@@ -18,6 +18,8 @@ spec:
   template:
     metadata:
       annotations:
+        checksum/config: {{ .Values.config | toJson | sha256sum }}
+        checksum/controllerConfig: {{ .Values.controllerConfig | toJson | sha256sum }}
         kubectl.kubernetes.io/default-container: manager
       labels:
         {{- include "chart.labels" . | nindent 8 }}
