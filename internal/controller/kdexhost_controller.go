@@ -59,10 +59,9 @@ type KDexHostReconciler struct {
 	RequeueDelay  time.Duration
 	Scheme        *runtime.Scheme
 
-	mu                    sync.RWMutex
-	memoizedConfiguration string
-	memoizedDeployment    *appsv1.DeploymentSpec
-	memoizedService       *corev1.ServiceSpec
+	mu                 sync.RWMutex
+	memoizedDeployment *appsv1.DeploymentSpec
+	memoizedService    *corev1.ServiceSpec
 }
 
 // nolint:gocyclo
@@ -260,7 +259,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return ctrl.Result{}, err
 	}
 
-	configMapOp, err := r.createOrUpdateConfigMap(ctx, &host)
+	configMapOp, configHash, err := r.createOrUpdateConfigMap(ctx, &host)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -305,7 +304,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return ctrl.Result{}, err
 	}
 
-	deploymentOp, deployment, err := r.createOrUpdateDeployment(ctx, &host)
+	deploymentOp, deployment, err := r.createOrUpdateDeployment(ctx, &host, configHash)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -519,15 +518,7 @@ func (r *KDexHostReconciler) cleanupRbacFinalizers(ctx context.Context, host *kd
 	return nil
 }
 
-func (r *KDexHostReconciler) getMemoizedConfiguration() (string, error) {
-	r.mu.RLock()
-
-	if r.memoizedConfiguration != "" {
-		r.mu.RUnlock()
-		return r.memoizedConfiguration, nil
-	}
-
-	r.mu.RUnlock()
+func (r *KDexHostReconciler) getConfiguration() (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -545,9 +536,7 @@ func (r *KDexHostReconciler) getMemoizedConfiguration() (string, error) {
 		return "", fmt.Errorf("failed to encode object to YAML: %w", err)
 	}
 
-	r.memoizedConfiguration = buf.String()
-
-	return r.memoizedConfiguration, nil
+	return buf.String(), nil
 }
 
 func (r *KDexHostReconciler) getMemoizedDeployment() *appsv1.DeploymentSpec {
@@ -587,10 +576,10 @@ func (r *KDexHostReconciler) getMemoizedService() *corev1.ServiceSpec {
 func (r *KDexHostReconciler) createOrUpdateConfigMap(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-) (controllerutil.OperationResult, error) {
-	configString, err := r.getMemoizedConfiguration()
+) (controllerutil.OperationResult, string, error) {
+	configString, err := r.getConfiguration()
 	if err != nil {
-		return controllerutil.OperationResultNone, err
+		return controllerutil.OperationResultNone, "", err
 	}
 
 	configMap := &corev1.ConfigMap{
@@ -642,10 +631,10 @@ func (r *KDexHostReconciler) createOrUpdateConfigMap(
 			kdexv1alpha1.ConditionReasonReconcileError,
 			err.Error(),
 		)
-		return controllerutil.OperationResultNone, err
+		return controllerutil.OperationResultNone, "", err
 	}
 
-	return op, nil
+	return op, Hash(configString), nil
 }
 
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
@@ -722,6 +711,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 func (r *KDexHostReconciler) createOrUpdateDeployment(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
+	configHash string,
 ) (controllerutil.OperationResult, *appsv1.Deployment, error) {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -758,6 +748,9 @@ func (r *KDexHostReconciler) createOrUpdateDeployment(
 				deployment.Spec.Selector.MatchLabels["app.kubernetes.io/name"] = kdexWeb
 				deployment.Spec.Selector.MatchLabels["kdex.dev/instance"] = host.Name
 
+				if deployment.Spec.Template.Annotations == nil {
+					deployment.Spec.Template.Annotations = make(map[string]string)
+				}
 				if deployment.Spec.Template.Labels == nil {
 					deployment.Spec.Template.Labels = make(map[string]string)
 				}
@@ -766,6 +759,9 @@ func (r *KDexHostReconciler) createOrUpdateDeployment(
 
 				deployment.Spec.Template.Spec = *r.getMemoizedDeployment().Template.Spec.DeepCopy()
 			}
+
+			deployment.Annotations["checksum/config"] = configHash
+			deployment.Spec.Template.Annotations["checksum/config"] = configHash
 
 			foundFocalHost := false
 			foundServiceName := false
