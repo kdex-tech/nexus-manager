@@ -2,7 +2,7 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: kdex-nexus-mutating-webhook-configuration
+  name: nexus-manager-mutating-webhook-configuration
   namespace: {{ .Release.Namespace }}
   annotations:
     {{- if .Values.certmanager.enable }}
@@ -14,7 +14,7 @@ webhooks:
   - name: mutate.kdexapp.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexapp
     failurePolicy: Ignore
@@ -34,7 +34,7 @@ webhooks:
   - name: mutate.kdexclusterapp.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterapp
     failurePolicy: Ignore
@@ -54,7 +54,7 @@ webhooks:
   - name: mutate.kdexclusterpagearchetype.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterpagearchetype
     failurePolicy: Ignore
@@ -74,7 +74,7 @@ webhooks:
   - name: mutate.kdexclusterpagefooter.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterpagefooter
     failurePolicy: Ignore
@@ -94,7 +94,7 @@ webhooks:
   - name: mutate.kdexclusterpageheader.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterpageheader
     failurePolicy: Ignore
@@ -114,7 +114,7 @@ webhooks:
   - name: mutate.kdexclusterpagenavigation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterpagenavigation
     failurePolicy: Ignore
@@ -134,7 +134,7 @@ webhooks:
   - name: mutate.kdexclusterscriptlibrary.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterscriptlibrary
     failurePolicy: Ignore
@@ -154,7 +154,7 @@ webhooks:
   - name: mutate.kdexclustertheme.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclustertheme
     failurePolicy: Ignore
@@ -174,7 +174,7 @@ webhooks:
   - name: mutate.kdexclusterutilitypage.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexclusterutilitypage
     failurePolicy: Ignore
@@ -194,7 +194,7 @@ webhooks:
   - name: mutate.kdexfunction.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexfunction
     failurePolicy: Ignore
@@ -215,7 +215,7 @@ webhooks:
   - name: mutate.kdexhost.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexhost
     failurePolicy: Ignore
@@ -235,7 +235,7 @@ webhooks:
   - name: mutate.kdexpagearchetype.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexpagearchetype
     failurePolicy: Ignore
@@ -255,7 +255,7 @@ webhooks:
   - name: mutate.kdexpagebinding.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexpagebinding
     failurePolicy: Ignore
@@ -275,7 +275,7 @@ webhooks:
   - name: mutate.kdexpagefooter.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexpagefooter
     failurePolicy: Ignore
@@ -295,7 +295,7 @@ webhooks:
   - name: mutate.kdexpageheader.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexpageheader
     failurePolicy: Ignore
@@ -315,7 +315,7 @@ webhooks:
   - name: mutate.kdexpagenavigation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexpagenavigation
     failurePolicy: Ignore
@@ -335,7 +335,7 @@ webhooks:
   - name: mutate.kdexscriptlibrary.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexscriptlibrary
     failurePolicy: Ignore
@@ -355,7 +355,7 @@ webhooks:
   - name: mutate.kdextheme.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdextheme
     failurePolicy: Ignore
@@ -375,7 +375,7 @@ webhooks:
   - name: mutate.kdexutilitypage.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /mutate-kdex-dev-v1alpha1-kdexutilitypage
     failurePolicy: Ignore
@@ -396,7 +396,7 @@ webhooks:
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: kdex-nexus-validating-webhook-configuration
+  name: nexus-manager-validating-webhook-configuration
   namespace: {{ .Release.Namespace }}
   annotations:
     {{- if .Values.certmanager.enable }}
@@ -408,7 +408,7 @@ webhooks:
   - name: validate.kdexapp.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexapp
     failurePolicy: Ignore
@@ -428,7 +428,7 @@ webhooks:
   - name: validate.kdexclusterapp.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterapp
     failurePolicy: Ignore
@@ -448,7 +448,7 @@ webhooks:
   - name: validate.kdexclusterscriptlibrary.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterscriptlibrary
     failurePolicy: Ignore
@@ -468,7 +468,7 @@ webhooks:
   - name: validate.kdexclustertheme.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclustertheme
     failurePolicy: Ignore
@@ -488,7 +488,7 @@ webhooks:
   - name: validate.kdexclustertranslation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclustertranslation
     failurePolicy: Ignore
@@ -508,7 +508,7 @@ webhooks:
   - name: validate.kdexclusterutilitypage.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterutilitypage
     failurePolicy: Ignore
@@ -528,7 +528,7 @@ webhooks:
   - name: validate.kdexfunction.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexfunction
     failurePolicy: Ignore
@@ -549,7 +549,7 @@ webhooks:
   - name: validate.kdexhost.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexhost
     failurePolicy: Ignore
@@ -569,7 +569,7 @@ webhooks:
   - name: validate.kdexpagebinding.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexpagebinding
     failurePolicy: Ignore
@@ -589,7 +589,7 @@ webhooks:
   - name: validate.kdexscriptlibrary.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexscriptlibrary
     failurePolicy: Ignore
@@ -609,7 +609,7 @@ webhooks:
   - name: validate.kdextheme.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdextheme
     failurePolicy: Ignore
@@ -629,7 +629,7 @@ webhooks:
   - name: validate.kdextranslation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdextranslation
     failurePolicy: Ignore
@@ -649,7 +649,7 @@ webhooks:
   - name: validate.kdexutilitypage.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexutilitypage
     failurePolicy: Ignore
@@ -669,7 +669,7 @@ webhooks:
   - name: validation.kdexclusterpagearchetype.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterpagearchetype
     failurePolicy: Ignore
@@ -689,7 +689,7 @@ webhooks:
   - name: validation.kdexclusterpagefooter.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterpagefooter
     failurePolicy: Ignore
@@ -709,7 +709,7 @@ webhooks:
   - name: validation.kdexclusterpageheader.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterpageheader
     failurePolicy: Ignore
@@ -729,7 +729,7 @@ webhooks:
   - name: validation.kdexclusterpagenavigation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexclusterpagenavigation
     failurePolicy: Ignore
@@ -749,7 +749,7 @@ webhooks:
   - name: validation.kdexpagearchetype.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexpagearchetype
     failurePolicy: Ignore
@@ -769,7 +769,7 @@ webhooks:
   - name: validation.kdexpagefooter.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexpagefooter
     failurePolicy: Ignore
@@ -789,7 +789,7 @@ webhooks:
   - name: validation.kdexpageheader.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexpageheader
     failurePolicy: Ignore
@@ -809,7 +809,7 @@ webhooks:
   - name: validation.kdexpagenavigation.kdex.dev
     clientConfig:
       service:
-        name: kdex-nexus-webhook-service
+        name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
         path: /validate-kdex-dev-v1alpha1-kdexpagenavigation
     failurePolicy: Ignore

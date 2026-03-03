@@ -4,13 +4,13 @@ kind: ClusterRole
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-  name: kdex-nexus-host-controller-role
+  name: host-controller-role
 rules:
-
 - apiGroups:
   - ""
   resources:
   - configmaps
+  - secrets
   - services
   verbs:
   - create
@@ -20,18 +20,15 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - ""
   resources:
   - pods
-  - secrets
   - serviceaccounts
   verbs:
   - get
   - list
   - watch
-
 - apiGroups:
   - apps
   resources:
@@ -44,7 +41,6 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - batch
   resources:
@@ -58,7 +54,6 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
@@ -71,7 +66,6 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - kdex.dev
   resources:
@@ -97,7 +91,6 @@ rules:
   - get
   - list
   - watch
-
 - apiGroups:
   - kdex.dev
   resources:
@@ -115,7 +108,6 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - kdex.dev
   resources:
@@ -140,7 +132,6 @@ rules:
   - get
   - patch
   - update
-
 - apiGroups:
   - kpack.io
   resources:
@@ -153,14 +144,12 @@ rules:
   - patch
   - update
   - watch
-
 - apiGroups:
   - kpack.io
   resources:
   - images/finalizers
   verbs:
   - update
-
 - apiGroups:
   - kpack.io
   resources:
@@ -169,7 +158,6 @@ rules:
   - get
   - patch
   - update
-
 - apiGroups:
   - networking.k8s.io
   resources:

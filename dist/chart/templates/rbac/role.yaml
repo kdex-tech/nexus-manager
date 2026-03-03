@@ -5,7 +5,7 @@ kind: ClusterRole
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-  name: kdex-nexus-manager-role
+  name: nexus-manager-manager-role
 rules:
 - apiGroups:
   - ""

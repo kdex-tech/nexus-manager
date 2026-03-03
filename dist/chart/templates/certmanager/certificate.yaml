@@ -25,9 +25,9 @@ metadata:
     {{- include "chart.labels" . | nindent 4 }}
 spec:
   dnsNames:
-    - kdex-nexus.{{ .Release.Namespace }}.svc
-    - kdex-nexus.{{ .Release.Namespace }}.svc.cluster.local
-    - kdex-nexus-webhook-service.{{ .Release.Namespace }}.svc
+    - nexus-manager.{{ .Release.Namespace }}.svc
+    - nexus-manager.{{ .Release.Namespace }}.svc.cluster.local
+    - nexus-manager-webhook-service.{{ .Release.Namespace }}.svc
   issuerRef:
     kind: Issuer
     name: selfsigned-issuer
@@ -53,9 +53,9 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   dnsNames:
-    - kdex-nexus.{{ .Release.Namespace }}.svc
-    - kdex-nexus.{{ .Release.Namespace }}.svc.cluster.local
-    - kdex-nexus-metrics-service.{{ .Release.Namespace }}.svc
+    - nexus-manager.{{ .Release.Namespace }}.svc
+    - nexus-manager.{{ .Release.Namespace }}.svc.cluster.local
+    - nexus-manager-metrics-service.{{ .Release.Namespace }}.svc
   issuerRef:
     kind: Issuer
     name: selfsigned-issuer
