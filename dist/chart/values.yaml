@@ -51,7 +51,7 @@ config:
       template:
         spec:
           containers:
-          - image: ghcr.io/kdex-tech/host-manager:0.2.6
+          - image: ghcr.io/kdex-tech/host-manager:0.2.7
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
