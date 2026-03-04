@@ -1,11 +1,7 @@
 package controller
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -29,26 +25,6 @@ const (
 	FALSE        = "false"
 	MAX_ATTEMPTS = 10
 )
-
-type Stringer interface {
-	String() string
-}
-
-func Hash[T any](s T) string {
-	var buf bytes.Buffer
-	switch v := any(s).(type) {
-	case string:
-		buf.WriteString(v)
-	case []byte:
-		buf.Write(v)
-	case Stringer:
-		buf.WriteString(v.String())
-	default:
-		fmt.Fprintf(&buf, "%v", v)
-	}
-	hash := sha256.Sum256(buf.Bytes())
-	return hex.EncodeToString(hash[:])
-}
 
 // nolint:gocyclo
 func MakeHandlerByReferencePath(

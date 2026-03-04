@@ -27,12 +27,3 @@ func TestMapSlice(t *testing.T) {
 		t.Log("BUG: MapSlice didn't correctly map all items")
 	}
 }
-
-func TestPtr(t *testing.T) {
-	val := 42
-	ptr := Ptr(val)
-	if ptr == nil || *ptr != 42 {
-		t.Errorf("Unexpected ptr: %v", ptr)
-		t.Log("BUG: Ptr returned incorrect pointer")
-	}
-}

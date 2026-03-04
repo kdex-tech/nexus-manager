@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -634,7 +635,7 @@ func (r *KDexHostReconciler) createOrUpdateConfigMap(
 		return controllerutil.OperationResultNone, "", err
 	}
 
-	return op, Hash(configString), nil
+	return op, utils.Hash(configString), nil
 }
 
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
