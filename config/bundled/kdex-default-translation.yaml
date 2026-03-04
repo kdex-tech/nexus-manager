@@ -13,8 +13,10 @@ spec:
       error.label: "The following error occurred while processing your request:"
       error.title: An error occurred on %s
       login.logout: Logout
+      login.or: or
       login.password: Password
       login.signin: Sign In
+      login.signin.with: Sign In with %s
       login.title: Login to %s
       login.username: Username
   - lang: de
@@ -26,8 +28,10 @@ spec:
       error.label: "Ein Fehler ist aufgetreten, während Ihre Anfrage verarbeitet wurde:"
       error.title: Fehler auf %s
       login.logout: Abmelden
+      login.or: oder
       login.password: Passwort
       login.signin: Anmelden
+      login.signin.with: Anmelden mit %s
       login.title: Login bei %s
       login.username: Benutzername
   - lang: es
@@ -39,8 +43,10 @@ spec:
       error.label: "El siguiente error ocurrió al procesar su solicitud:"
       error.title: Error en %s
       login.logout: Cerrar sesión
+      login.or: o
       login.password: Contraseña
       login.signin: Iniciar sesión
+      login.signin.with: Iniciar sesión con %s
       login.title: Iniciar sesión en %s
       login.username: Nombre de usuario
   - lang: fr
@@ -52,21 +58,25 @@ spec:
       error.label: "Une erreur est survenue lors du traitement de votre demande:"
       error.title: Erreur sur %s
       login.logout: Déconnexion
+      login.or: ou
       login.password: Mot de passe
       login.signin: Se connecter
+      login.signin.with: Se connecter avec %s
       login.title: Connexion à %s
       login.username: Nom d'utilisateur
   - lang: it
     keysAndValues:
       all-rights-reserved: Tutti i diritti riservati.
-      announcement.message: Questo host è pronto a gestire le richieste, ma non sono state ancora distribuite pagine. Si prega di distribuire pagine per iniziare a servire contenuti.
+      announcement.message: Questo host è pronto a gestire le richieste, mas non sono state ancora distribuite pagine. Si prega di distribuire pagine per iniziare a servire contenuti.
       announcement.organization: "Organizzazione: %s"
       announcement.title: Benvenuto su %s
       error.label: "Si è verificato un errore durante il trattamento della sua richiesta:"
       error.title: Errore su %s
       login.logout: Logout
+      login.or: o
       login.password: Password
       login.signin: Accedi
+      login.signin.with: Accedi con %s
       login.title: Accedi a %s
       login.username: Nome utente
   - lang: pt
@@ -78,8 +88,10 @@ spec:
       error.label: "Ocorreu um erro ao processar sua solicitação:"
       error.title: Erro no %s
       login.logout: Sair
+      login.or: ou
       login.password: Senha
       login.signin: Entrar
+      login.signin.with: Entrar com %s
       login.title: Entrar em %s
       login.username: Nome de usuário
   - lang: ru
@@ -91,8 +103,10 @@ spec:
       error.label: "Произошла ошибка при обработке вашего запроса:"
       error.title: Ошибка на %s
       login.logout: Выйти
+      login.or: или
       login.password: Пароль
       login.signin: Войти
+      login.signin.with: Войти через %s
       login.title: Вход в %s
       login.username: Имя пользователя
   - lang: zh
@@ -104,7 +118,9 @@ spec:
       error.label: "在处理您的请求时发生错误:"
       error.title: 错误在 %s
       login.logout: 退出登录
+      login.or: 或
       login.password: 密码
       login.signin: 登录
+      login.signin.with: 使用 %s 登录
       login.title: 登录到 %s
       login.username: 用户名

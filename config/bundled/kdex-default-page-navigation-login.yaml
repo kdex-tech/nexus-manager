@@ -40,6 +40,13 @@ spec:
         </div>
       </li>
     [[- else -]]
+      [[- if .Extra.oidc -]]
+      <li class="navigation login-link">
+        <a href="[[ .Extra.oidc.authCodeURL ]]" class="login-button">
+          [[ l10n "login.signin.with" .Extra.oidc.name ]]
+        </a>
+      </li>
+      [[- end -]]
       <li class="navigation login-link">
         <a href="/-/login" class="login-button">
           [[ l10n "login.signin" ]]

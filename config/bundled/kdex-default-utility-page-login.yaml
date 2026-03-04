@@ -23,6 +23,15 @@ spec:
           <button type="submit">[[ l10n "login.signin" ]]</button>
         </form>
 
+        [[- if .Extra.oidc -]]
+          <div class="oidc-divider">
+            <span>[[ l10n "login.or" ]]</span>
+          </div>
+          <a href="[[ .Extra.oidc.authCodeURL ]]" class="oidc-button">
+            [[ l10n "login.signin.with" .Extra.oidc.name ]]
+          </a>
+        [[- end -]]
+
         <div class="footer-organization">
           <p>[[l10n "announcement.organization" .Organization]]</p>
         </div>
