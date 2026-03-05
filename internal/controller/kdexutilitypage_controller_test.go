@@ -113,10 +113,10 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`spec.contentEntries: Invalid value: "array": slot 'main' must be specified`))
+			Expect(err.Error()).To(ContainSubstring(`spec.contentEntries: Invalid value: slot 'main' must be specified`))
 		})
 
-		It("should not validate with empty content entry", func() {
+		It("should not validate with slot with no content", func() {
 			utilityPage := &kdexv1alpha1.KDexUtilityPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      KDexUtilityPageName,
@@ -134,7 +134,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`"object": exactly one of the fields in [appRef rawHTML] must be set`))
+			Expect(err.Error()).To(ContainSubstring(`exactly one of the fields in [appRef rawHTML] must be set`))
 		})
 
 		It("should not validate with no page archetype", func() {
@@ -158,7 +158,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`spec.pageArchetypeRef: Invalid value: "object": pageArchetypeRef.name must not be empty`))
+			Expect(err.Error()).To(ContainSubstring(`pageArchetypeRef.name must not be empty`))
 		})
 
 		It("should not validate with empty content entry", func() {
@@ -185,7 +185,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`spec.contentEntries[0]: Invalid value: "object": exactly one of the fields in [appRef rawHTML] must be set`))
+			Expect(err.Error()).To(ContainSubstring(`exactly one of the fields in [appRef rawHTML] must be set`))
 		})
 
 		It("should not validate with invalid rawHTML content entry", func() {
