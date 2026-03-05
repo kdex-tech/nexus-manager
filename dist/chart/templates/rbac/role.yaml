@@ -89,10 +89,10 @@ rules:
   - kdexinternaltranslations
   - kdexinternalutilitypages
   - kdexpagearchetypes
-  - kdexpages
   - kdexpagefooters
   - kdexpageheaders
   - kdexpagenavigations
+  - kdexpages
   - kdexscriptlibraries
   - kdexthemes
   - kdextranslations
@@ -127,10 +127,10 @@ rules:
   - kdexinternaltranslations/finalizers
   - kdexinternalutilitypages/finalizers
   - kdexpagearchetypes/finalizers
-  - kdexpages/finalizers
   - kdexpagefooters/finalizers
   - kdexpageheaders/finalizers
   - kdexpagenavigations/finalizers
+  - kdexpages/finalizers
   - kdexscriptlibraries/finalizers
   - kdexthemes/finalizers
   - kdextranslations/finalizers
@@ -159,10 +159,10 @@ rules:
   - kdexinternaltranslations/status
   - kdexinternalutilitypages/status
   - kdexpagearchetypes/status
-  - kdexpages/status
   - kdexpagefooters/status
   - kdexpageheaders/status
   - kdexpagenavigations/status
+  - kdexpages/status
   - kdexscriptlibraries/status
   - kdexthemes/status
   - kdextranslations/status

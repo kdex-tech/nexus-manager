@@ -232,26 +232,6 @@ webhooks:
           - v1alpha1
         resources:
           - kdexhosts
-  - name: mutate.kdexpagearchetype.kdex.dev
-    clientConfig:
-      service:
-        name: nexus-manager-webhook-service
-        namespace: {{ .Release.Namespace }}
-        path: /mutate-kdex-dev-v1alpha1-kdexpagearchetype
-    failurePolicy: Ignore
-    sideEffects: None
-    admissionReviewVersions:
-      - v1
-    rules:
-      - operations:
-          - CREATE
-          - UPDATE
-        apiGroups:
-          - kdex.dev
-        apiVersions:
-          - v1alpha1
-        resources:
-          - kdexpagearchetypes
   - name: mutate.kdexpage.kdex.dev
     clientConfig:
       service:
@@ -272,6 +252,26 @@ webhooks:
           - v1alpha1
         resources:
           - kdexpages
+  - name: mutate.kdexpagearchetype.kdex.dev
+    clientConfig:
+      service:
+        name: nexus-manager-webhook-service
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-kdex-dev-v1alpha1-kdexpagearchetype
+    failurePolicy: Ignore
+    sideEffects: None
+    admissionReviewVersions:
+      - v1
+    rules:
+      - operations:
+          - CREATE
+          - UPDATE
+        apiGroups:
+          - kdex.dev
+        apiVersions:
+          - v1alpha1
+        resources:
+          - kdexpagearchetypes
   - name: mutate.kdexpagefooter.kdex.dev
     clientConfig:
       service:
