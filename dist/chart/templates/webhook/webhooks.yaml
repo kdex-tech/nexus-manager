@@ -252,12 +252,12 @@ webhooks:
           - v1alpha1
         resources:
           - kdexpagearchetypes
-  - name: mutate.kdexpagebinding.kdex.dev
+  - name: mutate.kdexpage.kdex.dev
     clientConfig:
       service:
         name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
-        path: /mutate-kdex-dev-v1alpha1-kdexpagebinding
+        path: /mutate-kdex-dev-v1alpha1-kdexpage
     failurePolicy: Ignore
     sideEffects: None
     admissionReviewVersions:
@@ -271,7 +271,7 @@ webhooks:
         apiVersions:
           - v1alpha1
         resources:
-          - kdexpagebindings
+          - kdexpages
   - name: mutate.kdexpagefooter.kdex.dev
     clientConfig:
       service:
@@ -566,12 +566,12 @@ webhooks:
           - v1alpha1
         resources:
           - kdexhosts
-  - name: validate.kdexpagebinding.kdex.dev
+  - name: validate.kdexpage.kdex.dev
     clientConfig:
       service:
         name: nexus-manager-webhook-service
         namespace: {{ .Release.Namespace }}
-        path: /validate-kdex-dev-v1alpha1-kdexpagebinding
+        path: /validate-kdex-dev-v1alpha1-kdexpage
     failurePolicy: Ignore
     sideEffects: None
     admissionReviewVersions:
@@ -585,7 +585,7 @@ webhooks:
         apiVersions:
           - v1alpha1
         resources:
-          - kdexpagebindings
+          - kdexpages
   - name: validate.kdexscriptlibrary.kdex.dev
     clientConfig:
       service:

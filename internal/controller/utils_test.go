@@ -88,24 +88,24 @@ func addOrUpdatePageArchetype(
 	}).Should(Succeed())
 }
 
-func addOrUpdatePageBinding(
+func addOrUpdatePage(
 	ctx context.Context,
 	k8sClient client.Client,
-	pageBinding kdexv1alpha1.KDexPageBinding,
+	page kdexv1alpha1.KDexPage,
 ) {
 	Eventually(func(g Gomega) error {
-		list := &kdexv1alpha1.KDexPageBindingList{}
+		list := &kdexv1alpha1.KDexPageList{}
 		err := k8sClient.List(ctx, list, &client.ListOptions{
-			Namespace:     pageBinding.Namespace,
-			FieldSelector: fields.OneTermEqualSelector("metadata.name", pageBinding.Name),
+			Namespace:     page.Namespace,
+			FieldSelector: fields.OneTermEqualSelector("metadata.name", page.Name),
 		})
 		g.Expect(err).NotTo(HaveOccurred())
 		if len(list.Items) > 0 {
 			existing := list.Items[0]
-			existing.Spec = pageBinding.Spec
+			existing.Spec = page.Spec
 			g.Expect(k8sClient.Update(ctx, &existing)).To(Succeed())
 		} else {
-			g.Expect(k8sClient.Create(ctx, &pageBinding)).To(Succeed())
+			g.Expect(k8sClient.Create(ctx, &page)).To(Succeed())
 		}
 		return nil
 	}).Should(Succeed())
@@ -278,7 +278,7 @@ func cleanupResources(namespace string) {
 		{&kdexv1alpha1.KDexInternalHost{}, &kdexv1alpha1.KDexInternalHostList{}},
 		{&kdexv1alpha1.KDexInternalUtilityPage{}, &kdexv1alpha1.KDexInternalUtilityPageList{}},
 		{&kdexv1alpha1.KDexPageArchetype{}, &kdexv1alpha1.KDexPageArchetypeList{}},
-		{&kdexv1alpha1.KDexPageBinding{}, &kdexv1alpha1.KDexPageBindingList{}},
+		{&kdexv1alpha1.KDexPage{}, &kdexv1alpha1.KDexPageList{}},
 		{&kdexv1alpha1.KDexPageFooter{}, &kdexv1alpha1.KDexPageFooterList{}},
 		{&kdexv1alpha1.KDexPageHeader{}, &kdexv1alpha1.KDexPageHeaderList{}},
 		{&kdexv1alpha1.KDexPageNavigation{}, &kdexv1alpha1.KDexPageNavigationList{}},

@@ -20,7 +20,7 @@ spec:
                     </div>
                     <kdex-highlight>
                         <pre><code class="language-yaml">apiVersion: kdex.dev/v1alpha1
-            kind: KDexPageBinding
+            kind: KDexPage
             metadata:
               name: my-home-page
               namespace: [[.Host.Namespace]]

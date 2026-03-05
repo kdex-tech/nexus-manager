@@ -231,6 +231,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /mutate-kdex-dev-v1alpha1-kdexpage
+  failurePolicy: Ignore
+  name: mutate.kdexpage.kdex.dev
+  rules:
+  - apiGroups:
+    - kdex.dev
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - kdexpages
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /mutate-kdex-dev-v1alpha1-kdexpagearchetype
   failurePolicy: Ignore
   name: mutate.kdexpagearchetype.kdex.dev
@@ -244,26 +264,6 @@ webhooks:
     - UPDATE
     resources:
     - kdexpagearchetypes
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /mutate-kdex-dev-v1alpha1-kdexpagebinding
-  failurePolicy: Ignore
-  name: mutate.kdexpagebinding.kdex.dev
-  rules:
-  - apiGroups:
-    - kdex.dev
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - kdexpagebindings
   sideEffects: None
 - admissionReviewVersions:
   - v1
@@ -558,9 +558,9 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-kdex-dev-v1alpha1-kdexpagebinding
+      path: /validate-kdex-dev-v1alpha1-kdexpage
   failurePolicy: Ignore
-  name: validate.kdexpagebinding.kdex.dev
+  name: validate.kdexpage.kdex.dev
   rules:
   - apiGroups:
     - kdex.dev
@@ -570,7 +570,7 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - kdexpagebindings
+    - kdexpages
   sideEffects: None
 - admissionReviewVersions:
   - v1

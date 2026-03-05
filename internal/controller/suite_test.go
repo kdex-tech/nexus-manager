@@ -102,7 +102,7 @@ var _ = BeforeSuite(func() {
 	}
 
 	logger, err := kdexlog.New(&opts, map[string]string{
-		"kdexpagebinding": "2",
+		"kdexpage": "2",
 	})
 	if err != nil {
 		panic(err)
@@ -218,12 +218,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// Page Binding
-	pageBindingReconciler := &KDexPageBindingReconciler{
+	pageReconciler := &KDexPageReconciler{
 		Client:       k8sClient,
 		RequeueDelay: 0,
 		Scheme:       k8sClient.Scheme(),
 	}
-	err = pageBindingReconciler.SetupWithManager(k8sManager)
+	err = pageReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Page Footer

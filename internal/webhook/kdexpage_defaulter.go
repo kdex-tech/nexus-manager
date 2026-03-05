@@ -9,16 +9,16 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 )
 
-// +kubebuilder:webhook:path=/mutate-kdex-dev-v1alpha1-kdexpagebinding,mutating=true,failurePolicy=Ignore,sideEffects=None,groups=kdex.dev,resources=kdexpagebindings,verbs=create;update,versions=v1alpha1,name=mutate.kdexpagebinding.kdex.dev,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/mutate-kdex-dev-v1alpha1-kdexpage,mutating=true,failurePolicy=Ignore,sideEffects=None,groups=kdex.dev,resources=kdexpages,verbs=create;update,versions=v1alpha1,name=mutate.kdexpage.kdex.dev,admissionReviewVersions=v1
 
-type KDexPageBindingDefaulter[T runtime.Object] struct {
+type KDexPageDefaulter[T runtime.Object] struct {
 }
 
-func (a *KDexPageBindingDefaulter[T]) Default(ctx context.Context, obj T) error {
-	var spec *kdexv1alpha1.KDexPageBindingSpec
+func (a *KDexPageDefaulter[T]) Default(ctx context.Context, obj T) error {
+	var spec *kdexv1alpha1.KDexPageSpec
 
 	switch t := any(obj).(type) {
-	case *kdexv1alpha1.KDexPageBinding:
+	case *kdexv1alpha1.KDexPage:
 		spec = &t.Spec
 	default:
 		return fmt.Errorf("unsupported type: %T", t)

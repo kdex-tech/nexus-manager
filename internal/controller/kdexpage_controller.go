@@ -28,8 +28,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// KDexPageBindingReconciler reconciles a KDexPageBinding object
-type KDexPageBindingReconciler struct {
+// KDexPageReconciler reconciles a KDexPage object
+type KDexPageReconciler struct {
 	client.Client
 	Configuration configuration.NexusConfiguration
 	RequeueDelay  time.Duration
@@ -37,11 +37,11 @@ type KDexPageBindingReconciler struct {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *KDexPageBindingReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *KDexPageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if os.Getenv("ENABLE_WEBHOOKS") != FALSE {
-		return ctrl.NewWebhookManagedBy(mgr, &kdexv1alpha1.KDexPageBinding{}).
-			WithDefaulter(&nexuswebhook.KDexPageBindingDefaulter[*kdexv1alpha1.KDexPageBinding]{}).
-			WithValidator(&nexuswebhook.KDexPageBindingValidator[*kdexv1alpha1.KDexPageBinding]{}).
+		return ctrl.NewWebhookManagedBy(mgr, &kdexv1alpha1.KDexPage{}).
+			WithDefaulter(&nexuswebhook.KDexPageDefaulter[*kdexv1alpha1.KDexPage]{}).
+			WithValidator(&nexuswebhook.KDexPageValidator[*kdexv1alpha1.KDexPage]{}).
 			Complete()
 	}
 

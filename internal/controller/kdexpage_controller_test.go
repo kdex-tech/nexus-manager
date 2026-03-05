@@ -26,7 +26,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 )
 
-var _ = Describe("KDexPageBinding Controller", func() {
+var _ = Describe("KDexPage Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -38,12 +38,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if basePath is empty", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{},
+				Spec: kdexv1alpha1.KDexPageSpec{},
 			}
 
 			err := k8sClient.Create(ctx, resource)
@@ -52,12 +52,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if no contentEntries are provided", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					Paths: kdexv1alpha1.Paths{
 						BasePath: "/",
 					},
@@ -70,12 +70,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if contentEntries is empty", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{},
 					Paths: kdexv1alpha1.Paths{
 						BasePath: "/",
@@ -89,12 +89,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if contentEntries doesn't have a 'main' slot", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{},
 					},
@@ -110,12 +110,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if contentEntries doesn't have either 'rawHTML' or 'appRef'", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -133,12 +133,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if label is not set", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -159,12 +159,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if contentEntries has both 'rawHTML' and 'appRef'", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -196,12 +196,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if hostRef.name is empty", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -223,12 +223,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if pageArchetypeRef.name is missing name", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -253,12 +253,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if contentEntries has invalid rawHTML", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -286,12 +286,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if app contentEntry is missing customElementName", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -319,12 +319,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("must not validate if app contentEntry appRef is missing name", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
@@ -353,12 +353,12 @@ var _ = Describe("KDexPageBinding Controller", func() {
 		})
 
 		It("will validate with minimum fields", func() {
-			resource := &kdexv1alpha1.KDexPageBinding{
+			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexPageBindingSpec{
+				Spec: kdexv1alpha1.KDexPageSpec{
 					ContentEntries: []kdexv1alpha1.ContentEntry{
 						{
 							Slot: "main",
