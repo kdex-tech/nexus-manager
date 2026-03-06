@@ -57,7 +57,7 @@ config:
       kind: ClusterRole
       name: host-controller-role
   packageBuilder:
-    image: ghcr.io/kdex-tech/cli-tools:0.3.6
+    image: ghcr.io/kdex-tech/cli-tools:0.3.8
 
 # [RBAC]: To enable RBAC (Permissions) configurations
 rbac:
