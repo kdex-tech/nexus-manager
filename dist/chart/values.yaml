@@ -4,7 +4,7 @@ controllerManager:
   container:
     image:
       repository: ghcr.io/kdex-tech/nexus-manager
-      tag: 0.3.6
+      tag: 0.3.7
     imagePullPolicy: IfNotPresent
     args:
     - "--named-log-level=npm-registry=2"
@@ -51,7 +51,7 @@ config:
       template:
         spec:
           containers:
-          - image: ghcr.io/kdex-tech/host-manager:0.2.8
+          - image: ghcr.io/kdex-tech/host-manager:0.2.9
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
