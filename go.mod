@@ -2,7 +2,7 @@ module github.com/kdex-tech/nexus-manager
 
 go 1.26.0
 
-replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.179
+replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.180
 
 require (
 	github.com/go-logr/logr v1.4.3
