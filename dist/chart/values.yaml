@@ -45,7 +45,7 @@ controllerManager:
 # [CONFIG]: Configuration for the controller-manager
 config:
   backendDefault:
-    serverImage: ghcr.io/kdex-tech/backend-static:0.1.4
+    serverImage: ghcr.io/kdex-tech/backend-static:0.1.5
   hostDefault:
     deployment:
       template:
