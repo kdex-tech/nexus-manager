@@ -4,6 +4,7 @@ metadata:
   name: kdex-default-page-navigation-login
 spec:
   content: |
+    [[- if .Extra.AuthEnabled -]]
     <ul class="navigation login-status">
     [[- if .Extra.Identity -]]
       <li class="navigation user-profile dropdown">
@@ -54,3 +55,4 @@ spec:
       </li>
     [[- end -]]
     </ul>
+    [[- end -]]
