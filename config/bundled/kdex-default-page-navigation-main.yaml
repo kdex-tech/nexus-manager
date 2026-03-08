@@ -4,26 +4,27 @@ metadata:
   name: kdex-default-page-navigation-main
 spec:
   content: |
+    [[- $requestedPath := .BasePath -]]
     [[- define "navigation" -]]
       <ul class="navigation pages">
         [[- range $value := .PageMap | values | sortBy "Weight" true ]]
-          <li class="navigation page[[ if eq $value.BasePath $.RequestedBasePath ]] selected[[ end ]]">
+          <li class="navigation page[[ if eq $value.BasePath $.requestedPath ]] selected[[ end ]]">
             [[- if ne $value.Href "" -]]
               <a
-                class="navigation page-link[[ if eq $value.BasePath $.RequestedBasePath ]] selected[[ end ]]"
+                class="navigation page-link[[ if eq $value.BasePath $.requestedPath ]] selected[[ end ]]"
                 href="[[ $value.Href ]]"
               >[[ l10n $value.Label ]]</a>
             [[- else -]]
               <span
-                class="navigation page-entry[[ if eq $value.BasePath $.RequestedBasePath ]] selected[[ end ]]"
+                class="navigation page-entry[[ if eq $value.BasePath $.requestedPath ]] selected[[ end ]]"
               >[[ l10n $value.Label ]]</span>
             [[- end -]]
             
             [[- if ne $value.Children nil -]]
-              [[- template "navigation" dict "PageMap" $value.Children "RequestedBasePath" $.RequestedBasePath -]]
+              [[- template "navigation" dict "PageMap" $value.Children "requestedPath" $.requestedPath -]]
             [[- end -]]
           </li>
         [[- end -]]
       </ul>
     [[- end -]]
-    [[- template "navigation" dict "PageMap" .PageMap "RequestedBasePath" .BasePath -]]
+    [[- template "navigation" dict "PageMap" .PageMap "requestedPath" $requestedPath -]]
