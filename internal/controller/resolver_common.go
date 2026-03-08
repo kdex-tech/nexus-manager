@@ -236,20 +236,18 @@ func ResolveKDexObjectReference(
 	}
 
 	if err := c.Get(ctx, key, obj.(client.Object)); err != nil {
-		if errors.IsNotFound(err) {
-			kdexv1alpha1.SetConditions(
-				referrerConditions,
-				kdexv1alpha1.ConditionStatuses{
-					Degraded:    metav1.ConditionTrue,
-					Progressing: metav1.ConditionFalse,
-					Ready:       metav1.ConditionFalse,
-				},
-				kdexv1alpha1.ConditionReasonReconcileError,
-				err.Error(),
-			)
+		kdexv1alpha1.SetConditions(
+			referrerConditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionFalse,
+				Progressing: metav1.ConditionTrue,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconciling,
+			err.Error(),
+		)
 
-			return nil, true, ctrl.Result{RequeueAfter: requeueDelay}, nil
-		}
+		return nil, true, ctrl.Result{}, err
 	}
 
 	it := reflect.ValueOf(obj).Elem()
