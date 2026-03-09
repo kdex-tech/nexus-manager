@@ -61,7 +61,7 @@ config:
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.8
     packagerImagePullPolicy: IfNotPresent
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.1.0
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.1.2
     toolsImagePullPolicy: IfNotPresent
 
 # [RBAC]: To enable RBAC (Permissions) configurations
