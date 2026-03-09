@@ -46,18 +46,23 @@ controllerManager:
 config:
   backendDefault:
     serverImage: ghcr.io/kdex-tech/backend-static:0.1.5
+    serverImagePullPolicy: IfNotPresent
   hostDefault:
     deployment:
       template:
         spec:
           containers:
           - image: ghcr.io/kdex-tech/host-manager:0.2.9
+            imagePullPolicy: IfNotPresent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
       name: host-controller-role
-  packageBuilder:
-    image: ghcr.io/kdex-tech/cli-tools:0.3.8
+  packages:
+    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.8
+    packagerImagePullPolicy: IfNotPresent
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.1.0
+    toolsImagePullPolicy: IfNotPresent
 
 # [RBAC]: To enable RBAC (Permissions) configurations
 rbac:

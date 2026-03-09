@@ -244,8 +244,10 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 		--set "config.backendDefault.serverImagePullPolicy=Always" \
 		--set "config.hostDefault.deployment.template.spec.containers[0].image=${REPOSITORY}kdex-tech/host-manager:latest" \
 		--set "config.hostDefault.deployment.template.spec.containers[0].imagePullPolicy=Always" \
-		--set "config.packageBuilder.image=${REPOSITORY}kdex-tech/cli-tools:latest" \
-		--set "config.packageBuilder.imagePullPolicy=Always"
+		--set "config.packages.packagerImage=${REPOSITORY}kdex-tech/cli-tools:latest" \
+		--set "config.packages.packagerImagePullPolicy=Always" \
+		--set "config.packages.toolsImage=${REPOSITORY}kdex-tech/node-tools:latest" \
+		--set "config.packages.toolsImagePullPolicy=Always"
 
 .PHONY: undeploy-chart
 undeploy-chart: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
