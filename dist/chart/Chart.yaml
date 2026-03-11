@@ -2,6 +2,6 @@ apiVersion: v2
 name: kdex-cnas
 description: A Helm chart to distribute kdex-cnas
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.0.1
+appVersion: "0.0.1"
 icon: "https://example.com/icon.png"
