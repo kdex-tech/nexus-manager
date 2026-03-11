@@ -77,11 +77,6 @@ jobs:
       run: |
         go mod tidy
 
-    - name: Install the KDex CRDs
-      run: |
-        CRDS_DIR=$(go list -m -f '{{.Dir}}' kdex.dev/crds)
-        kubectl apply -f $CRDS_DIR/config/crd/bases
-
     - name: Install Helm
       run: |
         curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -112,13 +107,14 @@ jobs:
 
     - name: Install Helm chart for project
       run: |
-        make copy-bundled-for-chart
+        make copy-crds-for-chart copy-bundled-for-chart
         helm install my-release ./dist/chart \
           --create-namespace \
           --namespace kdex-nexus-system \
           --set controllerManager.container.image.repository=kdex-tech/nexus-manager \
           --set controllerManager.container.image.tag=ci \
-          --set controllerManager.container.image.pullPolicy=Always
+          --set controllerManager.container.image.pullPolicy=Always \
+          --set crd.enable=true
 
     - name: Check Helm release status
       run: |

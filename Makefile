@@ -198,7 +198,12 @@ CRDS_DIR = $(shell go list -m -f '{{.Dir}}' kdex.dev/crds)
 
 .PHONY: copy-crds-for-chart
 copy-crds-for-chart: ## Install CRDs from the kdex-crds module.
-	rm -rf dist/chart/crds && mkdir -p dist/chart/crds && cp $(CRDS_DIR)/config/crd/bases/* dist/chart/crds
+	rm -rf dist/chart/crds && mkdir -p dist/chart/crds
+	for f in $(CRDS_DIR)/config/crd/bases/*; do \
+		echo "{{- if .Values.crds.enable }}" > dist/chart/crds/$${f##*/}; \
+		cat $$f >> dist/chart/crds/$${f##*/}; \
+		echo "{{- end }}" >> dist/chart/crds/$${f##*/}; \
+	done
 
 .PHONY: copy-bundled-for-chart
 copy-bundled-for-chart: ## Install Bundled CRs.
@@ -232,7 +237,7 @@ lint-chart: copy-bundled-for-chart ## Lint chart.
 	$(HELM) lint ./dist/chart
 
 .PHONY: deploy-chart
-deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+deploy-chart: copy-crds-for-chart copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	$(HELM) upgrade nexus-manager ./dist/chart \
 		--create-namespace \
 		--install \
