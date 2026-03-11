@@ -1,7 +1,6 @@
 apiVersion: v2
-name: kdex-cnas
-description: A Helm chart to distribute kdex-cnas
+name: kcnas-operator
+description: A Helm chart to distribute K-CNAS Operator
 type: application
 version: 0.0.1
 appVersion: "0.0.1"
-icon: "https://example.com/icon.png"

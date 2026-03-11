@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   ci:
-    name: Build, Test, Publish
+    name: Build, Test
     runs-on: ubuntu-latest
     steps:
     - name: Clone the code
@@ -48,6 +48,90 @@ jobs:
         go mod tidy
         make test
 
+  test-chart:
+    name: Test Chart
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+    - name: Clone the code
+      uses: actions/checkout@v6
+
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+
+    - name: Install the latest version of kind
+      run: |
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+        chmod +x ./kind
+        sudo mv ./kind /usr/local/bin/kind
+
+    - name: Verify kind installation
+      run: kind version
+
+    - name: Create kind cluster
+      run: kind create cluster
+
+    - name: Run Go mod tidy
+      run: |
+        go mod tidy
+
+    - name: Install the KDex CRDs
+      run: |
+        CRDS_DIR=$(go list -m -f '{{.Dir}}' kdex.dev/crds)
+        kubectl apply -f $CRDS_DIR/config/crd/bases
+
+    - name: Install Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Verify Helm installation
+      run: helm version
+
+    - name: Lint Helm Chart
+      run: |
+        helm lint ./dist/chart
+
+    - name: Build and load nexus-manager image
+      run: |
+        make docker-build TAG=ci
+        kind load docker-image kdex-tech/nexus-manager:ci
+
+    - name: Install cert-manager via Helm
+      run: |
+        helm repo add jetstack https://charts.jetstack.io
+        helm repo update
+        helm install cert-manager jetstack/cert-manager --namespace cert-manager --create-namespace --set crds.enabled=true
+
+    - name: Wait for cert-manager to be ready
+      run: |
+        kubectl wait --namespace cert-manager --for=condition=available --timeout=300s deployment/cert-manager
+        kubectl wait --namespace cert-manager --for=condition=available --timeout=300s deployment/cert-manager-cainjector
+        kubectl wait --namespace cert-manager --for=condition=available --timeout=300s deployment/cert-manager-webhook
+
+    - name: Install Helm chart for project
+      run: |
+        make copy-bundled-for-chart
+        helm install my-release ./dist/chart \
+          --create-namespace \
+          --namespace kdex-nexus-system \
+          --set controllerManager.container.image.repository=kdex-tech/nexus-manager \
+          --set controllerManager.container.image.tag=ci \
+          --set controllerManager.container.image.pullPolicy=Always
+
+    - name: Check Helm release status
+      run: |
+        helm status my-release --namespace kdex-nexus-system
+
+    - name: Verify controller manager is READY
+      run: |
+        kubectl -n kdex-nexus-system rollout status deployment kdex-nexus-controller-manager
+
+    - name: Display the status of the bundled CRs
+      run: |
+        kubectl get kdex-c
+
   publish-image:
     name: Publish Docker Image
     needs: ci
@@ -59,3 +143,15 @@ jobs:
 
     - name: Publish Docker Image
       uses: ./.github/actions/publish-docker-image
+
+  publish-chart:
+    name: Publish Helm Chart
+    needs: [publish-image, test-chart]
+    runs-on: ubuntu-latest
+    if: (github.repository == 'kdex-tech/nexus-manager') && startsWith(github.ref, 'refs/tags/') && (github.event_name != 'pull_request')
+    steps:
+    - name: Clone the code
+      uses: actions/checkout@v6
+
+    - name: Publish Helm Chart
+      uses: ./.github/actions/publish-helm-chart
