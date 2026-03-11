@@ -14,15 +14,16 @@
 
 
 {{- define "chart.labels" -}}
-{{- if .Chart.AppVersion -}}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/name: {{ include "chart.name" . }}
+{{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
 {{- if .Chart.Version }}
 helm.sh/chart: {{ .Chart.Version | quote }}
 {{- end }}
-app.kubernetes.io/name: {{ include "chart.name" . }}
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{ .Values.extraChartLabels | toYaml }}
 {{- end }}
 
 

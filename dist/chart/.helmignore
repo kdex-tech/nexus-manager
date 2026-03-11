@@ -20,6 +20,3 @@
 # IDE and editor-related files
 .idea/
 .vscode/
-
-# Helm chart artifacts
-dist/chart/*.tgz

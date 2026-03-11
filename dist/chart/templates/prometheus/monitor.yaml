@@ -5,7 +5,6 @@ kind: ServiceMonitor
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    control-plane: controller-manager
   name: nexus-manager-controller-manager-metrics-monitor
   namespace: {{ .Release.Namespace }}
 spec:
@@ -36,5 +35,5 @@ spec:
         {{- end }}
   selector:
     matchLabels:
-      control-plane: controller-manager
+      {{- include "chart.selectorLabels" . | nindent 6 }}
 {{- end }}

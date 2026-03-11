@@ -5,8 +5,8 @@ kind: Role
 metadata:
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-  namespace: {{ .Release.Namespace }}
   name: nexus-manager-leader-election-role
+  namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups:
   - ""

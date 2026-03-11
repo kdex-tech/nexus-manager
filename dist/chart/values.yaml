@@ -64,6 +64,9 @@ config:
     toolsImage: ghcr.io/kdex-tech/node-tools:0.1.2
     toolsImagePullPolicy: IfNotPresent
 
+# These labels are applied to all resources in the chart
+extraChartLabels: {}
+
 # [RBAC]: To enable RBAC (Permissions) configurations
 rbac:
   enable: true

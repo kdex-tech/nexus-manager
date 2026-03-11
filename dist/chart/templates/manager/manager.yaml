@@ -1,20 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kdex-nexus-controller-manager
-  namespace: {{ .Release.Namespace }}
   annotations:
     checksum/config: {{ .Values.config | toJson | sha256sum }}
     checksum/controllerConfig: {{ .Values.controllerConfig | toJson | sha256sum }}
   labels:
     {{- include "chart.labels" . | nindent 4 }}
-    control-plane: controller-manager
+  name: kdex-nexus-controller-manager
+  namespace: {{ .Release.Namespace }}
 spec:
   replicas:  {{ .Values.controllerManager.replicas }}
   selector:
     matchLabels:
       {{- include "chart.selectorLabels" . | nindent 6 }}
-      control-plane: controller-manager
   template:
     metadata:
       annotations:
@@ -23,7 +21,6 @@ spec:
         kubectl.kubernetes.io/default-container: manager
       labels:
         {{- include "chart.labels" . | nindent 8 }}
-        control-plane: controller-manager
         {{- if and .Values.controllerManager.pod .Values.controllerManager.pod.labels }}
         {{- range $key, $value := .Values.controllerManager.pod.labels }}
         {{ $key }}: {{ $value }}

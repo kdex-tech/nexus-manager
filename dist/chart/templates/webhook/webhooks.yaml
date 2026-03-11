@@ -2,14 +2,14 @@
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-  name: nexus-manager-mutating-webhook-configuration
-  namespace: {{ .Release.Namespace }}
   annotations:
     {{- if .Values.certmanager.enable }}
     cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/serving-cert"
     {{- end }}
   labels:
     {{- include "chart.labels" . | nindent 4 }}
+  name: nexus-manager-mutating-webhook-configuration
+  namespace: {{ .Release.Namespace }}
 webhooks:
   - name: mutate.kdexapp.kdex.dev
     clientConfig:
