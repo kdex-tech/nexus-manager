@@ -65,6 +65,8 @@ spec:
             - mountPath: /config.yaml
               name: config
               subPath: config.yaml
+            - mountPath: /etc/podinfo
+              name: podinfo
             {{- if and .Values.webhook.enable .Values.certmanager.enable }}
             - name: webhook-cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
@@ -85,6 +87,12 @@ spec:
         - name: config
           configMap:
             name: kdex-nexus-controller-manager
+        - name: podinfo
+          downwardAPI:
+            items:
+              - path: "labels"
+                fieldRef:
+                  fieldPath: metadata.labels
         {{- if and .Values.webhook.enable .Values.certmanager.enable }}
         - name: webhook-cert
           secret:
