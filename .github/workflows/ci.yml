@@ -49,6 +49,14 @@ jobs:
         go mod tidy
         make test
 
+  publish-image:
+    name: Publish Docker Image
+    needs: ci
+    runs-on: ubuntu-latest
+    if: ${{ env.PUBLISH == 'true' }}
+    steps:
+    - name: Clone the code
+      uses: actions/checkout@v6
+
     - name: Publish Docker Image
-      if: ${{ env.PUBLISH == 'true' }}
       uses: ./.github/actions/publish-docker-image
