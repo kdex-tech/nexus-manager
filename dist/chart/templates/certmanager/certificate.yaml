@@ -16,7 +16,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   annotations:
-    {{- if .Values.crds.keep }}
+    {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
     {{- end }}
   name: serving-cert
@@ -44,7 +44,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   annotations:
-    {{- if .Values.crds.keep }}
+    {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
     {{- end }}
   labels:

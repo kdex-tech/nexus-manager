@@ -23,7 +23,11 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- if .Chart.Version }}
 helm.sh/chart: {{ .Chart.Version | quote }}
 {{- end }}
-{{ .Values.extraChartLabels | toYaml }}
+{{- if .Values.extraChartLabels }}
+{{- range $key, $value := .Values.extraChartLabels }}
+{{ $key }}: {{ $value }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 

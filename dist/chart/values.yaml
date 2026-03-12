@@ -72,7 +72,7 @@ rbac:
   enable: true
 
 # [CRDs]: To enable the CRDs
-crds:
+crd:
   # This option determines whether the CRDs are included
   # in the installation process.
   enable: false
