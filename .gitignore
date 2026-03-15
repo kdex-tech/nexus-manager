@@ -28,5 +28,6 @@ go.work
 *~
 buildkitd.toml
 dist/chart/crds
+dist/chart/chart/*.tgz
 dist/chart/charts/*.tgz
 dist/chart/templates/bundled

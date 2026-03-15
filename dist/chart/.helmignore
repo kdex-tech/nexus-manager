@@ -12,6 +12,7 @@
 
 # Backup and temporary files
 *.swp
+*.tgz
 *.tmp
 *.bak
 *.orig

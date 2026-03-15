@@ -232,7 +232,7 @@ lint-chart: copy-bundled-for-chart ## Lint chart.
 	$(HELM) lint ./dist/chart
 
 .PHONY: deploy-chart
-deploy-chart: copy-crds-for-chart copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	$(HELM) upgrade nexus-manager ./dist/chart \
 		--create-namespace \
 		--install \

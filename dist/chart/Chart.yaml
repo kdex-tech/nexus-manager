@@ -4,8 +4,3 @@ description: A Helm chart to distribute K-CNAS Operator
 type: application
 version: 0.0.1
 appVersion: "0.0.1"
-dependencies:
-- name: valkey
-  version: 0.9.3
-  repository: https://valkey.io/valkey-helm
-  condition: valkey.enable,global.valkey.enabled
