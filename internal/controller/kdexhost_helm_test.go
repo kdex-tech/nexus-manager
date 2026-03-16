@@ -13,12 +13,17 @@ import (
 
 type MockHelmClient struct {
 	utils.HelmClientInterface
-	InstalledCharts []string
+	InstalledCharts   []string
 	UninstalledCharts []string
+	ChartValues       map[string]string
 }
 
 func (m *MockHelmClient) InstallOrUpgrade(ctx context.Context, spec *helmclient.ChartSpec) error {
 	m.InstalledCharts = append(m.InstalledCharts, spec.ReleaseName)
+	if m.ChartValues == nil {
+		m.ChartValues = make(map[string]string)
+	}
+	m.ChartValues[spec.ReleaseName] = spec.ValuesYaml
 	return nil
 }
 
@@ -115,6 +120,33 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				}
 				return foundHost && foundCompanion
 			}, "10s", "1s").Should(BeTrue(), "Expected host and companion charts to be installed")
+		})
+
+		It("it must allow overriding host-manager helm values", func() {
+			resource := &kdexv1alpha1.KDexHost{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: kdexv1alpha1.KDexHostSpec{
+					BrandName:    "KDex Tech",
+					Organization: "KDex Tech Inc.",
+					Routing: kdexv1alpha1.Routing{
+						Domains: []string{"kdex.dev"},
+					},
+					Helm: &kdexv1alpha1.HelmConfig{
+						HostManager: &kdexv1alpha1.HostManagerHelmConfig{
+							Values: "valkey:\n  enabled: false\n",
+						},
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			Eventually(func() string {
+				return mockHelmClient.ChartValues[resourceName]
+			}, "10s", "1s").Should(ContainSubstring("enabled: false"), "Expected valkey to be disabled via values override")
 		})
 	})
 })
