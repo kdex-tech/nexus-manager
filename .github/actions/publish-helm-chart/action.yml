@@ -35,6 +35,7 @@ runs:
     working-directory: dist
     shell: bash
     run: |
+      OCI_URL="oci://ghcr.io/${{ github.repository }}/charts"
       OCI_URL=$(echo "$OCI_URL" | tr '[:upper:]' '[:lower:]')
       for f in *.tgz ; do
           echo "$f"
