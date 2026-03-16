@@ -2,11 +2,12 @@ package controller
 
 import (
 	"context"
+	"slices"
 
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	helmclient "github.com/mittwald/go-helm-client"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 )
@@ -70,15 +71,10 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			// This test is expected to FAIL initially because the controller 
+			// This test is expected to FAIL initially because the controller
 			// doesn't use Helm yet.
 			Eventually(func() bool {
-				for _, name := range mockHelmClient.InstalledCharts {
-					if name == resourceName {
-						return true
-					}
-				}
-				return false
+				return slices.Contains(mockHelmClient.InstalledCharts, resourceName)
 			}, "10s", "1s").Should(BeTrue(), "Expected helm chart to be installed")
 		})
 

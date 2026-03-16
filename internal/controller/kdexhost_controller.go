@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -61,9 +60,7 @@ type KDexHostReconciler struct {
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
-	mu                 sync.RWMutex
-	memoizedDeployment *appsv1.DeploymentSpec
-	memoizedService    *corev1.ServiceSpec
+	mu sync.RWMutex
 }
 
 // nolint:gocyclo
@@ -154,7 +151,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			if err == nil {
 				if deployment.DeletionTimestamp.IsZero() {
 					// Instead of deleting directly, we'll uninstall the Helm releases
-					client, err := r.HelmClientFactory(host.Namespace)
+					c, err := r.HelmClientFactory(host.Namespace)
 					if err != nil {
 						return ctrl.Result{}, err
 					}
@@ -162,14 +159,14 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					// Uninstall companion charts
 					if host.Spec.Helm != nil {
 						for _, companion := range host.Spec.Helm.CompanionCharts {
-							if err := client.Uninstall(companion.Name); err != nil {
+							if err := c.Uninstall(companion.Name); err != nil {
 								log.Error(err, "failed to uninstall companion release", "name", companion.Name)
 							}
 						}
 					}
 
 					// Uninstall host manager chart
-					if err := client.Uninstall(host.Name); err != nil {
+					if err := c.Uninstall(host.Name); err != nil {
 						log.Error(err, "failed to uninstall host manager release", "name", host.Name)
 					}
 				}
@@ -518,104 +515,6 @@ func (r *KDexHostReconciler) getConfiguration() (string, error) {
 	return buf.String(), nil
 }
 
-func (r *KDexHostReconciler) getMemoizedDeployment() *appsv1.DeploymentSpec {
-	r.mu.RLock()
-
-	if r.memoizedDeployment != nil {
-		r.mu.RUnlock()
-		return r.memoizedDeployment
-	}
-
-	r.mu.RUnlock()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.memoizedDeployment = r.Configuration.HostDefault.Deployment.DeepCopy()
-
-	return r.memoizedDeployment
-}
-
-func (r *KDexHostReconciler) getMemoizedService() *corev1.ServiceSpec {
-	r.mu.RLock()
-
-	if r.memoizedService != nil {
-		r.mu.RUnlock()
-		return r.memoizedService
-	}
-
-	r.mu.RUnlock()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.memoizedService = r.Configuration.HostDefault.Service.DeepCopy()
-
-	return r.memoizedService
-}
-
-func (r *KDexHostReconciler) createOrUpdateConfigMap(
-	ctx context.Context,
-	host *kdexv1alpha1.KDexHost,
-) (controllerutil.OperationResult, string, error) {
-	configString, err := r.getConfiguration()
-	if err != nil {
-		return controllerutil.OperationResultNone, "", err
-	}
-
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      host.Name,
-			Namespace: host.Namespace,
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(ctx, r.Client, configMap, func() error {
-		if configMap.CreationTimestamp.IsZero() {
-			if configMap.Annotations == nil {
-				configMap.Annotations = make(map[string]string)
-			}
-			maps.Copy(configMap.Annotations, host.Annotations)
-			if configMap.Labels == nil {
-				configMap.Labels = make(map[string]string)
-			}
-			maps.Copy(configMap.Labels, host.Labels)
-
-			configMap.Labels["app.kubernetes.io/name"] = kdexWeb
-			configMap.Labels["kdex.dev/instance"] = host.Name
-		}
-
-		configMap.Data = map[string]string{
-			"config.yaml": configString,
-		}
-
-		return ctrl.SetControllerReference(host, configMap, r.Scheme)
-	})
-
-	log := logf.FromContext(ctx)
-
-	log.V(2).Info(
-		"createOrUpdateConfigMap",
-		"name", configMap.Name,
-		"op", op,
-		"err", err,
-	)
-
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			err.Error(),
-		)
-		return controllerutil.OperationResultNone, "", err
-	}
-
-	return op, utils.Hash(configString), nil
-}
-
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
@@ -685,342 +584,4 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	}
 
 	return op, internalHost, nil
-}
-
-func (r *KDexHostReconciler) createOrUpdateDeployment(
-	ctx context.Context,
-	host *kdexv1alpha1.KDexHost,
-	configHash string,
-) (controllerutil.OperationResult, *appsv1.Deployment, error) {
-	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      host.Name,
-			Namespace: host.Namespace,
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(
-		ctx,
-		r.Client,
-		deployment,
-		func() error {
-			if deployment.CreationTimestamp.IsZero() {
-				if deployment.Annotations == nil {
-					deployment.Annotations = make(map[string]string)
-				}
-				maps.Copy(deployment.Annotations, host.Annotations)
-				if deployment.Labels == nil {
-					deployment.Labels = make(map[string]string)
-				}
-				maps.Copy(deployment.Labels, host.Labels)
-
-				deployment.Labels["app.kubernetes.io/name"] = kdexWeb
-				deployment.Labels["kdex.dev/instance"] = host.Name
-
-				deployment.Spec = *r.getMemoizedDeployment().DeepCopy()
-
-				if deployment.Spec.Selector == nil {
-					deployment.Spec.Selector = &metav1.LabelSelector{
-						MatchLabels: map[string]string{},
-					}
-				}
-				deployment.Spec.Selector.MatchLabels["app.kubernetes.io/name"] = kdexWeb
-				deployment.Spec.Selector.MatchLabels["kdex.dev/instance"] = host.Name
-
-				if deployment.Spec.Template.Annotations == nil {
-					deployment.Spec.Template.Annotations = make(map[string]string)
-				}
-				if deployment.Spec.Template.Labels == nil {
-					deployment.Spec.Template.Labels = make(map[string]string)
-				}
-				deployment.Spec.Template.Labels["app.kubernetes.io/name"] = kdexWeb
-				deployment.Spec.Template.Labels["kdex.dev/instance"] = host.Name
-
-				deployment.Spec.Template.Spec = *r.getMemoizedDeployment().Template.Spec.DeepCopy()
-			}
-
-			deployment.Annotations["checksum/config"] = configHash
-			deployment.Spec.Template.Annotations["checksum/config"] = configHash
-
-			foundFocalHost := false
-			foundServiceName := false
-			for idx, value := range deployment.Spec.Template.Spec.Containers[0].Args {
-				if strings.Contains(value, "--focal-host") {
-					deployment.Spec.Template.Spec.Containers[0].Args[idx] = "--focal-host=" + host.Name
-					foundFocalHost = true
-				}
-				if strings.Contains(value, "--service-name") {
-					deployment.Spec.Template.Spec.Containers[0].Args[idx] = "--service-name=" + host.Name
-					foundServiceName = true
-				}
-			}
-			for idx, value := range deployment.Spec.Template.Spec.Containers[0].Command {
-				if strings.Contains(value, "--focal-host") {
-					deployment.Spec.Template.Spec.Containers[0].Command[idx] = "--focal-host=" + host.Name
-					foundFocalHost = true
-				}
-				if strings.Contains(value, "--service-name") {
-					deployment.Spec.Template.Spec.Containers[0].Command[idx] = "--service-name=" + host.Name
-					foundServiceName = true
-				}
-			}
-			if !foundFocalHost {
-				deployment.Spec.Template.Spec.Containers[0].Args = append(deployment.Spec.Template.Spec.Containers[0].Args, "--focal-host="+host.Name)
-			}
-			if !foundServiceName {
-				deployment.Spec.Template.Spec.Containers[0].Args = append(deployment.Spec.Template.Spec.Containers[0].Args, "--service-name="+host.Name)
-			}
-
-			deployment.Spec.Template.Spec.Containers[0].Name = host.Name
-			deployment.Spec.Template.Spec.ServiceAccountName = host.Name
-
-			for idx, volume := range deployment.Spec.Template.Spec.Volumes {
-				if volume.Name == "config" {
-					deployment.Spec.Template.Spec.Volumes[idx].ConfigMap.Name = host.Name
-				}
-			}
-
-			if len(host.Spec.Env) > 0 {
-				deployment.Spec.Template.Spec.Containers[0].Env = MergeEnvVars(deployment.Spec.Template.Spec.Containers[0].Env, host.Spec.Env)
-			}
-
-			if host.Spec.Resources.Size() > 0 {
-				deployment.Spec.Template.Spec.Containers[0].Resources = host.Spec.Resources
-			}
-
-			if host.Spec.Replicas != nil {
-				deployment.Spec.Replicas = host.Spec.Replicas
-			}
-
-			return ctrl.SetControllerReference(host, deployment, r.Scheme)
-		},
-	)
-
-	log := logf.FromContext(ctx)
-
-	log.V(2).Info(
-		"createOrUpdateDeployment",
-		"name", deployment.Name,
-		"op", op,
-		"err", err,
-	)
-
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			err.Error(),
-		)
-
-		return controllerutil.OperationResultNone, nil, err
-	}
-
-	return op, deployment, nil
-}
-
-func (r *KDexHostReconciler) createOrUpdateClusterRoleBinding(
-	ctx context.Context,
-	host *kdexv1alpha1.KDexHost,
-) (controllerutil.OperationResult, error) {
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("%s-%s", host.Name, host.Namespace),
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(
-		ctx,
-		r.Client,
-		clusterRoleBinding,
-		func() error {
-			if clusterRoleBinding.CreationTimestamp.IsZero() {
-				if clusterRoleBinding.Annotations == nil {
-					clusterRoleBinding.Annotations = make(map[string]string)
-				}
-				maps.Copy(clusterRoleBinding.Annotations, host.Annotations)
-				if clusterRoleBinding.Labels == nil {
-					clusterRoleBinding.Labels = make(map[string]string)
-				}
-				maps.Copy(clusterRoleBinding.Labels, host.Labels)
-
-				clusterRoleBinding.Labels["app.kubernetes.io/name"] = kdexWeb
-				clusterRoleBinding.Labels["kdex.dev/instance"] = host.Name
-			}
-
-			clusterRoleBinding.RoleRef = *r.Configuration.HostDefault.RoleRef.DeepCopy()
-			clusterRoleBinding.Subjects = []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      host.Name,
-					Namespace: host.Namespace,
-				},
-			}
-
-			controllerutil.AddFinalizer(clusterRoleBinding, hostFinalizerName)
-			return nil
-		},
-	)
-
-	log := logf.FromContext(ctx)
-
-	log.V(2).Info(
-		"createOrUpdateClusterRoleBinding",
-		"name", clusterRoleBinding.Name,
-		"op", op,
-		"err", err,
-	)
-
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			err.Error(),
-		)
-
-		return controllerutil.OperationResultNone, err
-	}
-
-	return op, nil
-}
-
-func (r *KDexHostReconciler) createOrUpdateService(
-	ctx context.Context,
-	host *kdexv1alpha1.KDexHost,
-) (controllerutil.OperationResult, error) {
-	service := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      host.Name,
-			Namespace: host.Namespace,
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(
-		ctx,
-		r.Client,
-		service,
-		func() error {
-			if service.CreationTimestamp.IsZero() {
-				if service.Annotations == nil {
-					service.Annotations = make(map[string]string)
-				}
-				maps.Copy(service.Annotations, host.Annotations)
-				if service.Labels == nil {
-					service.Labels = make(map[string]string)
-				}
-				maps.Copy(service.Labels, host.Labels)
-
-				service.Labels["app.kubernetes.io/name"] = kdexWeb
-				service.Labels["kdex.dev/instance"] = host.Name
-
-				service.Spec = *r.getMemoizedService().DeepCopy()
-
-				if service.Spec.Selector == nil {
-					service.Spec.Selector = make(map[string]string)
-				}
-
-				service.Spec.Selector["app.kubernetes.io/name"] = kdexWeb
-				service.Spec.Selector["kdex.dev/instance"] = host.Name
-			}
-
-			return ctrl.SetControllerReference(host, service, r.Scheme)
-		},
-	)
-
-	log := logf.FromContext(ctx)
-
-	log.V(2).Info(
-		"createOrUpdateService",
-		"name", service.Name,
-		"op", op,
-		"err", err,
-	)
-
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			err.Error(),
-		)
-
-		return controllerutil.OperationResultNone, err
-	}
-
-	return op, nil
-}
-
-func (r *KDexHostReconciler) createOrUpdateServiceAccount(
-	ctx context.Context,
-	host *kdexv1alpha1.KDexHost,
-) (controllerutil.OperationResult, error) {
-	serviceAccount := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      host.Name,
-			Namespace: host.Namespace,
-		},
-	}
-
-	op, err := ctrl.CreateOrUpdate(
-		ctx,
-		r.Client,
-		serviceAccount,
-		func() error {
-			if serviceAccount.CreationTimestamp.IsZero() {
-				if serviceAccount.Annotations == nil {
-					serviceAccount.Annotations = make(map[string]string)
-				}
-				maps.Copy(serviceAccount.Annotations, host.Annotations)
-				if serviceAccount.Labels == nil {
-					serviceAccount.Labels = make(map[string]string)
-				}
-				maps.Copy(serviceAccount.Labels, host.Labels)
-
-				serviceAccount.Labels["app.kubernetes.io/name"] = kdexWeb
-				serviceAccount.Labels["kdex.dev/instance"] = host.Name
-			}
-
-			controllerutil.AddFinalizer(serviceAccount, hostFinalizerName)
-			return ctrl.SetControllerReference(host, serviceAccount, r.Scheme)
-		},
-	)
-
-	log := logf.FromContext(ctx)
-
-	log.V(2).Info(
-		"createOrUpdateServiceAccount",
-		"name", serviceAccount.Name,
-		"op", op,
-		"err", err,
-	)
-
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			err.Error(),
-		)
-
-		return controllerutil.OperationResultNone, err
-	}
-
-	return op, nil
 }
