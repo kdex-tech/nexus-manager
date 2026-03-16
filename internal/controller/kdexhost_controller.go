@@ -56,9 +56,10 @@ const (
 // KDexHostReconciler reconciles a KDexHost object
 type KDexHostReconciler struct {
 	client.Client
-	Configuration configuration.NexusConfiguration
-	RequeueDelay  time.Duration
-	Scheme        *runtime.Scheme
+	Configuration     configuration.NexusConfiguration
+	HelmClientFactory func(namespace string) (utils.HelmClientInterface, error)
+	RequeueDelay      time.Duration
+	Scheme            *runtime.Scheme
 
 	mu                 sync.RWMutex
 	memoizedDeployment *appsv1.DeploymentSpec
@@ -152,8 +153,24 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			err = r.Get(ctx, req.NamespacedName, deployment)
 			if err == nil {
 				if deployment.DeletionTimestamp.IsZero() {
-					if err := r.Delete(ctx, deployment); err != nil {
+					// Instead of deleting directly, we'll uninstall the Helm releases
+					client, err := r.HelmClientFactory(host.Namespace)
+					if err != nil {
 						return ctrl.Result{}, err
+					}
+
+					// Uninstall companion charts
+					if host.Spec.Helm != nil {
+						for _, companion := range host.Spec.Helm.CompanionCharts {
+							if err := client.Uninstall(companion.Name); err != nil {
+								log.Error(err, "failed to uninstall companion release", "name", companion.Name)
+							}
+						}
+					}
+
+					// Uninstall host manager chart
+					if err := client.Uninstall(host.Name); err != nil {
+						log.Error(err, "failed to uninstall host manager release", "name", host.Name)
 					}
 				}
 				// Deployment still exists. We wait.
@@ -264,7 +281,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return ctrl.Result{}, err
 	}
 
-	configMapOp, configHash, err := r.createOrUpdateConfigMap(ctx, &host)
+	helmOp, err := r.reconcileHelmReleases(ctx, &host)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -279,63 +296,24 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return ctrl.Result{}, err
 	}
 
-	serviceAccountOp, err := r.createOrUpdateServiceAccount(ctx, &host)
+	// We still need to wait for the deployment to be ready.
+	// Since we are using Helm, we'll query the deployment created by Helm.
+	deployment := &appsv1.Deployment{}
+	err = r.Get(ctx, req.NamespacedName, deployment)
 	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileSuccess,
-			err.Error(),
-		)
-		return ctrl.Result{}, err
-	}
-
-	clusterRoleBindingOp, err := r.createOrUpdateClusterRoleBinding(ctx, &host)
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileSuccess,
-			err.Error(),
-		)
-		return ctrl.Result{}, err
-	}
-
-	deploymentOp, deployment, err := r.createOrUpdateDeployment(ctx, &host, configHash)
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileSuccess,
-			err.Error(),
-		)
-		return ctrl.Result{}, err
-	}
-
-	serviceOp, err := r.createOrUpdateService(ctx, &host)
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileSuccess,
-			err.Error(),
-		)
+		if errors.IsNotFound(err) {
+			kdexv1alpha1.SetConditions(
+				&host.Status.Conditions,
+				kdexv1alpha1.ConditionStatuses{
+					Degraded:    metav1.ConditionFalse,
+					Progressing: metav1.ConditionTrue,
+					Ready:       metav1.ConditionFalse,
+				},
+				kdexv1alpha1.ConditionReasonReconcileSuccess,
+				"Waiting for deployment to be created by Helm.",
+			)
+			return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -351,7 +329,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				kdexv1alpha1.ConditionReasonReconcileSuccess,
 				fmt.Sprintf("Waiting for deployment %s/%s to be ready.", deployment.Namespace, deployment.Name),
 			)
-			return ctrl.Result{RequeueAfter: r.RequeueDelay}, err
+			return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 		}
 	}
 
@@ -401,11 +379,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	log.V(1).Info(
 		"reconciled",
-		"configMapOp", configMapOp,
-		"serviceAccountOp", serviceAccountOp,
-		"clusterRoleBindingOp", clusterRoleBindingOp,
-		"deploymentOp", deploymentOp,
-		"serviceOp", serviceOp,
+		"helmOp", helmOp,
 		"internalHostOp", internalHostOp,
 	)
 

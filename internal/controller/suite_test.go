@@ -47,6 +47,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -61,6 +63,7 @@ var (
 	k8sClient       client.Client
 	namespace       string
 	secondNamespace string
+	hostReconciler  *KDexHostReconciler
 )
 
 type MockRegistry struct{}
@@ -199,11 +202,14 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// Host
-	hostReconciler := &KDexHostReconciler{
+	hostReconciler = &KDexHostReconciler{
 		Client:        k8sManager.GetClient(),
 		Configuration: configuration,
 		RequeueDelay:  0,
 		Scheme:        k8sManager.GetScheme(),
+		HelmClientFactory: func(namespace string) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace)
+		},
 	}
 	err = hostReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
