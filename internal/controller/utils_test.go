@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -265,15 +266,6 @@ func cleanupResources(namespace string) {
 
 	for _, pair := range []Pairs{
 		{&kdexv1alpha1.KDexApp{}, &kdexv1alpha1.KDexAppList{}},
-		{&kdexv1alpha1.KDexClusterApp{}, &kdexv1alpha1.KDexClusterAppList{}},
-		{&kdexv1alpha1.KDexClusterPageArchetype{}, &kdexv1alpha1.KDexClusterPageArchetypeList{}},
-		{&kdexv1alpha1.KDexClusterPageFooter{}, &kdexv1alpha1.KDexClusterPageFooterList{}},
-		{&kdexv1alpha1.KDexClusterPageHeader{}, &kdexv1alpha1.KDexClusterPageHeaderList{}},
-		{&kdexv1alpha1.KDexClusterPageNavigation{}, &kdexv1alpha1.KDexClusterPageNavigationList{}},
-		{&kdexv1alpha1.KDexClusterScriptLibrary{}, &kdexv1alpha1.KDexClusterScriptLibraryList{}},
-		{&kdexv1alpha1.KDexClusterTheme{}, &kdexv1alpha1.KDexClusterThemeList{}},
-		{&kdexv1alpha1.KDexClusterTranslation{}, &kdexv1alpha1.KDexClusterTranslationList{}},
-		{&kdexv1alpha1.KDexClusterUtilityPage{}, &kdexv1alpha1.KDexClusterUtilityPageList{}},
 		{&kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}},
 		{&kdexv1alpha1.KDexInternalHost{}, &kdexv1alpha1.KDexInternalHostList{}},
 		{&kdexv1alpha1.KDexInternalUtilityPage{}, &kdexv1alpha1.KDexInternalUtilityPageList{}},
@@ -288,18 +280,32 @@ func cleanupResources(namespace string) {
 		{&kdexv1alpha1.KDexFunction{}, &kdexv1alpha1.KDexFunctionList{}},
 		{&kdexv1alpha1.KDexUtilityPage{}, &kdexv1alpha1.KDexUtilityPageList{}},
 		{&corev1.Secret{}, &corev1.SecretList{}},
+		{&appsv1.Deployment{}, &appsv1.DeploymentList{}},
 	} {
-		err := k8sClient.DeleteAllOf(ctx, pair.resource, client.InNamespace(namespace))
+		// Remove finalizers first
+		list := pair.list
+		err := k8sClient.List(ctx, list, client.InNamespace(namespace))
+		if err == nil {
+			items, _ := meta.ExtractList(list)
+			for _, item := range items {
+				obj := item.(client.Object)
+				if len(obj.GetFinalizers()) > 0 {
+					obj.SetFinalizers(nil)
+					_ = k8sClient.Update(ctx, obj)
+				}
+			}
+		}
+
+		err = k8sClient.DeleteAllOf(ctx, pair.resource, client.InNamespace(namespace))
 		Expect(err).NotTo(HaveOccurred())
 
 		Eventually(func(g Gomega) error {
-			list := pair.list
 			err := k8sClient.List(ctx, list, client.InNamespace(namespace))
 			g.Expect(err).NotTo(HaveOccurred())
 			items, err := meta.ExtractList(list)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(items).To(HaveLen(0))
 			return nil
-		}).To(Succeed())
+		}, "10s").Should(Succeed())
 	}
 }

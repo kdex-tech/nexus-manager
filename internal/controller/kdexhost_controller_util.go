@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 
 	"github.com/kdex-tech/nexus-manager/internal/webhook"
@@ -27,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -45,11 +48,17 @@ func (r *KDexHostReconciler) createOrUpdateInternalTranslation(
 		},
 	}
 
-	op, err := ctrl.CreateOrUpdate(ctx, r.Client, internalTranslation, func() error {
-		if internalTranslation.CreationTimestamp.IsZero() {
+	// Use Patch instead of CreateOrUpdate to be more resilient to conflicts
+	op, err := controllerutil.CreateOrPatch(ctx, r.Client, internalTranslation, func() error {
+		if internalTranslation.Annotations == nil {
 			internalTranslation.Annotations = make(map[string]string)
-			maps.Copy(internalTranslation.Annotations, host.Annotations)
+		}
+		if internalTranslation.Labels == nil {
 			internalTranslation.Labels = make(map[string]string)
+		}
+
+		if internalTranslation.CreationTimestamp.IsZero() {
+			maps.Copy(internalTranslation.Annotations, host.Annotations)
 			maps.Copy(internalTranslation.Labels, host.Labels)
 
 			internalTranslation.Labels["app.kubernetes.io/name"] = kdexWeb
@@ -62,6 +71,19 @@ func (r *KDexHostReconciler) createOrUpdateInternalTranslation(
 
 		return ctrl.SetControllerReference(host, internalTranslation, r.Scheme)
 	})
+
+	if err == nil {
+		// Update status separately
+		latest := &kdexv1alpha1.KDexInternalTranslation{}
+		if getErr := r.Get(ctx, client.ObjectKeyFromObject(internalTranslation), latest); getErr == nil {
+			patch := client.MergeFrom(latest.DeepCopy())
+			if latest.Status.Attributes == nil {
+				latest.Status.Attributes = make(map[string]string)
+			}
+			latest.Status.Attributes["translation.generation"] = strconv.FormatInt(generation, 10)
+			_ = r.Status().Patch(ctx, latest, patch)
+		}
+	}
 
 	log := logf.FromContext(ctx)
 
@@ -104,11 +126,16 @@ func (r *KDexHostReconciler) createOrUpdateInternalUtilityPage(
 		},
 	}
 
-	op, err := ctrl.CreateOrUpdate(ctx, r.Client, internalUtilityPage, func() error {
-		if internalUtilityPage.CreationTimestamp.IsZero() {
+	op, err := controllerutil.CreateOrPatch(ctx, r.Client, internalUtilityPage, func() error {
+		if internalUtilityPage.Annotations == nil {
 			internalUtilityPage.Annotations = make(map[string]string)
-			maps.Copy(internalUtilityPage.Annotations, host.Annotations)
+		}
+		if internalUtilityPage.Labels == nil {
 			internalUtilityPage.Labels = make(map[string]string)
+		}
+
+		if internalUtilityPage.CreationTimestamp.IsZero() {
+			maps.Copy(internalUtilityPage.Annotations, host.Annotations)
 			maps.Copy(internalUtilityPage.Labels, host.Labels)
 
 			internalUtilityPage.Labels["app.kubernetes.io/name"] = kdexWeb
@@ -122,6 +149,19 @@ func (r *KDexHostReconciler) createOrUpdateInternalUtilityPage(
 
 		return ctrl.SetControllerReference(host, internalUtilityPage, r.Scheme)
 	})
+
+	if err == nil {
+		// Update status separately
+		latest := &kdexv1alpha1.KDexInternalUtilityPage{}
+		if getErr := r.Get(ctx, client.ObjectKeyFromObject(internalUtilityPage), latest); getErr == nil {
+			patch := client.MergeFrom(latest.DeepCopy())
+			if latest.Status.Attributes == nil {
+				latest.Status.Attributes = make(map[string]string)
+			}
+			latest.Status.Attributes["utilitypage.generation"] = strconv.FormatInt(utilityPageGeneration, 10)
+			_ = r.Status().Patch(ctx, latest, patch)
+		}
+	}
 
 	log := logf.FromContext(ctx)
 
@@ -143,13 +183,13 @@ func (r *KDexHostReconciler) createOrUpdateInternalUtilityPage(
 func (r *KDexHostReconciler) resolveTranslations(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-) ([]corev1.LocalObjectReference, bool, error) {
+) ([]corev1.LocalObjectReference, bool, ctrl.Result, error) {
 	refs := []corev1.LocalObjectReference{}
 
 	for _, translationRef := range host.Spec.TranslationRefs {
-		resolvedObj, shouldReturn, _, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &translationRef, r.RequeueDelay)
+		resolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &translationRef, r.RequeueDelay)
 		if shouldReturn {
-			return nil, true, err
+			return nil, true, r1, err
 		}
 
 		if resolvedObj != nil {
@@ -163,10 +203,13 @@ func (r *KDexHostReconciler) resolveTranslations(
 
 			internalTranslation, err := r.createOrUpdateInternalTranslation(ctx, spec, resolvedObj.GetName(), resolvedObj.GetGeneration(), host)
 			if err != nil {
-				return nil, true, err
+				return nil, true, ctrl.Result{}, err
 			}
 			refs = append(refs, corev1.LocalObjectReference{Name: internalTranslation.Name})
 
+			if host.Status.Attributes == nil {
+				host.Status.Attributes = make(map[string]string)
+			}
 			host.Status.Attributes[translationRef.Name+".translation.generation"] = fmt.Sprintf("%d", resolvedObj.GetGeneration())
 		}
 	}
@@ -176,9 +219,9 @@ func (r *KDexHostReconciler) resolveTranslations(
 		Kind: "KDexClusterTranslation",
 	}
 
-	defaultResolvedObj, _, _, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &defaultTranslationRef, r.RequeueDelay)
-	if err != nil {
-		return nil, false, err
+	defaultResolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &defaultTranslationRef, r.RequeueDelay)
+	if shouldReturn {
+		return nil, true, r1, err
 	}
 
 	if defaultResolvedObj != nil {
@@ -192,21 +235,24 @@ func (r *KDexHostReconciler) resolveTranslations(
 
 		internalTranslation, err := r.createOrUpdateInternalTranslation(ctx, spec, defaultResolvedObj.GetName(), defaultResolvedObj.GetGeneration(), host)
 		if err != nil {
-			return nil, true, err
+			return nil, true, ctrl.Result{}, err
 		}
 		refs = append(refs, corev1.LocalObjectReference{Name: internalTranslation.Name})
 
+		if host.Status.Attributes == nil {
+			host.Status.Attributes = make(map[string]string)
+		}
 		host.Status.Attributes[defaultTranslationRef.Name+".translation.generation"] = fmt.Sprintf("%d", defaultResolvedObj.GetGeneration())
 	}
 
-	return refs, false, nil
+	return refs, false, ctrl.Result{}, nil
 }
 
 //nolint:gocyclo
 func (r *KDexHostReconciler) resolveUtilityPages(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-) (*corev1.LocalObjectReference, *corev1.LocalObjectReference, *corev1.LocalObjectReference, bool, error) {
+) (*corev1.LocalObjectReference, *corev1.LocalObjectReference, *corev1.LocalObjectReference, bool, ctrl.Result, error) {
 	refs := map[kdexv1alpha1.KDexUtilityPageType]*corev1.LocalObjectReference{}
 
 	types := []kdexv1alpha1.KDexUtilityPageType{
@@ -228,9 +274,9 @@ func (r *KDexHostReconciler) resolveUtilityPages(
 			}
 		}
 
-		resolvedObj, shouldReturn, _, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, ref, r.RequeueDelay)
+		resolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, ref, r.RequeueDelay)
 		if shouldReturn && !isDefaultUtilityPage(ref) {
-			return nil, nil, nil, true, err
+			return nil, nil, nil, true, r1, err
 		}
 
 		if resolvedObj != nil {
@@ -244,20 +290,23 @@ func (r *KDexHostReconciler) resolveUtilityPages(
 
 			// Validate Type matches
 			if spec.Type != pageType {
-				return nil, nil, nil, true, fmt.Errorf("utility page type %s does not match requested type %s", spec.Type, pageType)
+				return nil, nil, nil, true, ctrl.Result{}, fmt.Errorf("utility page type %s does not match requested type %s", spec.Type, pageType)
 			}
 
 			internalRef, err := r.createOrUpdateInternalUtilityPage(ctx, host, spec, pageType, resolvedObj.GetGeneration())
 			if err != nil {
-				return nil, nil, nil, true, err
+				return nil, nil, nil, true, ctrl.Result{}, err
 			}
 			refs[pageType] = internalRef
 
+			if host.Status.Attributes == nil {
+				host.Status.Attributes = make(map[string]string)
+			}
 			host.Status.Attributes[strings.ToLower(string(pageType))+".utilitypage.generation"] = fmt.Sprintf("%d", resolvedObj.GetGeneration())
 		}
 	}
 
-	return refs[kdexv1alpha1.AnnouncementUtilityPageType], refs[kdexv1alpha1.ErrorUtilityPageType], refs[kdexv1alpha1.LoginUtilityPageType], false, nil
+	return refs[kdexv1alpha1.AnnouncementUtilityPageType], refs[kdexv1alpha1.ErrorUtilityPageType], refs[kdexv1alpha1.LoginUtilityPageType], false, ctrl.Result{}, nil
 }
 
 func isDefaultUtilityPage(ref *kdexv1alpha1.KDexObjectReference) bool {

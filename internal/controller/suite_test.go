@@ -35,6 +35,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"kdex.dev/crds/configuration"
@@ -47,6 +48,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -61,6 +64,8 @@ var (
 	k8sClient       client.Client
 	namespace       string
 	secondNamespace string
+	hostReconciler  *KDexHostReconciler
+	mgrStopped      chan struct{}
 )
 
 type MockRegistry struct{}
@@ -199,11 +204,15 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	// Host
-	hostReconciler := &KDexHostReconciler{
+	hostReconciler = &KDexHostReconciler{
 		Client:        k8sManager.GetClient(),
+		Ctx:           ctx,
 		Configuration: configuration,
 		RequeueDelay:  0,
 		Scheme:        k8sManager.GetScheme(),
+		HelmClientFactory: func(namespace string) (utils.HelmClientInterface, error) {
+			return &MockHelmClient{}, nil
+		},
 	}
 	err = hostReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
@@ -298,16 +307,91 @@ var _ = BeforeSuite(func() {
 	err = functionReconciler.SetupWithManager(k8sManager)
 	Expect(err).ToNot(HaveOccurred())
 
+	// Create default resources once for all tests
+	defaultTranslation := &kdexv1alpha1.KDexClusterTranslation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kdex-default-translation",
+		},
+		Spec: kdexv1alpha1.KDexTranslationSpec{
+			Translations: []kdexv1alpha1.Translation{
+				{
+					Lang: "en",
+					KeysAndValues: map[string]string{
+						"brandName":    "KDex Tech",
+						"organization": "KDex Tech Inc.",
+					},
+				},
+			},
+		},
+	}
+	_ = k8sClient.Create(ctx, defaultTranslation)
+
+	defaultArchetype := &kdexv1alpha1.KDexClusterPageArchetype{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kdex-default-page-archetype",
+		},
+		Spec: kdexv1alpha1.KDexPageArchetypeSpec{
+			Content: "[[ .Content.main ]]",
+		},
+	}
+	_ = k8sClient.Create(ctx, defaultArchetype)
+
+	for _, name := range []string{
+		"kdex-default-utility-page-announcement",
+		"kdex-default-utility-page-error",
+		"kdex-default-utility-page-login",
+	} {
+		page := &kdexv1alpha1.KDexClusterUtilityPage{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Spec: kdexv1alpha1.KDexUtilityPageSpec{
+				Type: kdexv1alpha1.AnnouncementUtilityPageType,
+				ContentEntries: []kdexv1alpha1.ContentEntry{
+					{
+						Slot: "main",
+						ContentEntryStatic: kdexv1alpha1.ContentEntryStatic{
+							RawHTML: "<h1>Announcement</h1>",
+						},
+					},
+				},
+				PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					Kind: "KDexClusterPageArchetype",
+					Name: "kdex-default-page-archetype",
+				},
+			},
+		}
+		if strings.Contains(name, "error") {
+			page.Spec.Type = kdexv1alpha1.ErrorUtilityPageType
+			page.Spec.ContentEntries[0].ContentEntryStatic.RawHTML = "<h1>Error</h1>"
+		} else if strings.Contains(name, "login") {
+			page.Spec.Type = kdexv1alpha1.LoginUtilityPageType
+			page.Spec.ContentEntries[0].ContentEntryStatic.RawHTML = "<h1>Login</h1>"
+		}
+		_ = k8sClient.Create(ctx, page)
+	}
+
+	mgrStopped = make(chan struct{})
 	go func() {
 		defer GinkgoRecover()
+		defer close(mgrStopped)
 		err := k8sManager.Start(ctx)
 		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
 	}()
+
+	// Wait for cache to sync and resources to be available in the manager's cache
+	By("waiting for cache to sync")
+	Eventually(func() error {
+		return k8sManager.GetClient().Get(ctx, types.NamespacedName{Name: "kdex-default-translation"}, &kdexv1alpha1.KDexClusterTranslation{})
+	}, "10s", "1s").Should(Succeed())
 })
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
 	cancel()
+	if mgrStopped != nil {
+		Eventually(mgrStopped, "30s").Should(BeClosed())
+	}
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })

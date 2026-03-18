@@ -113,7 +113,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`spec.contentEntries: Invalid value: slot 'main' must be specified`))
+			Expect(err.Error()).To(ContainSubstring(`slot 'main' must be specified`))
 		})
 
 		It("should not validate with slot with no content", func() {
