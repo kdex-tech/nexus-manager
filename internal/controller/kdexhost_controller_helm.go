@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/chart/common/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -172,9 +174,16 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(ctx context.Context, helm
 		return err
 	}
 
-	valuesYaml := fmt.Sprintf("config:\n  config.yaml: |\n    %s\n", configString)
+	vals, err := common.ReadValues([]byte(configString))
+	if err != nil {
+		return err
+	}
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
-		valuesYaml += host.Spec.Helm.HostManager.Values
+		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
+		if err != nil {
+			return err
+		}
+		vals = util.CoalesceTables(overrideVals, vals)
 	}
 
 	chartName := "oci://ghcr.io/kdex-tech/charts/host-manager"
@@ -188,7 +197,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(ctx context.Context, helm
 		ReleaseName: host.Name,
 		ChartName:   chartName,
 		Namespace:   host.Namespace,
-		ValuesYaml:  valuesYaml,
+		Values:      vals,
 		Version:     version,
 		Wait:        false, // Don't block the reconciler
 		UpgradeCRDs: false,
@@ -204,11 +213,16 @@ func (r *KDexHostReconciler) reconcileCompanionChart(ctx context.Context, helmCl
 		}
 	}
 
+	vals, err := common.ReadValues([]byte(companion.Values))
+	if err != nil {
+		return err
+	}
+
 	spec := &utils.ChartSpec{
 		ReleaseName: companion.Name,
 		ChartName:   companion.Chart,
 		Namespace:   host.Namespace,
-		ValuesYaml:  companion.Values,
+		Values:      vals,
 		Version:     companion.Version,
 		Wait:        false,
 		UpgradeCRDs: false,

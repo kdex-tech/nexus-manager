@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/chart/common/util"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/repo/v1"
-	"sigs.k8s.io/yaml"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ChartSpec defines the parameters for a Helm chart installation or upgrade.
@@ -18,7 +20,7 @@ type ChartSpec struct {
 	ReleaseName string
 	ChartName   string
 	Namespace   string
-	ValuesYaml  string
+	Values      map[string]any
 	Version     string
 	Wait        bool
 	UpgradeCRDs bool
@@ -43,7 +45,10 @@ var _ HelmClientInterface = (*HelmClient)(nil)
 // NewHelmClient creates a new HelmClient for the given namespace.
 func NewHelmClient(namespace string) (*HelmClient, error) {
 	settings := cli.New()
-	actionConfig := new(action.Configuration)
+
+	actionConfig := action.NewConfiguration(
+		action.ConfigurationSetLogger(
+			logr.ToSlogHandler(logf.Log.WithName("helm"))))
 
 	// Use secret driver by default
 	helmDriver := os.Getenv("HELM_DRIVER")
@@ -51,7 +56,11 @@ func NewHelmClient(namespace string) (*HelmClient, error) {
 		helmDriver = "secret"
 	}
 
-	if err := actionConfig.Init(settings.RESTClientGetter(), namespace, helmDriver); err != nil {
+	if err := actionConfig.Init(
+		settings.RESTClientGetter(),
+		namespace,
+		helmDriver,
+	); err != nil {
 		return nil, fmt.Errorf("failed to init action config: %w", err)
 	}
 
@@ -94,16 +103,14 @@ func (h *HelmClient) InstallOrUpgrade(ctx context.Context, spec *ChartSpec) erro
 		return fmt.Errorf("failed to load chart %s: %w", spec.ChartName, err)
 	}
 
-	// Parse values
-	var vals map[string]interface{}
-	if spec.ValuesYaml != "" {
-		if err := yaml.Unmarshal([]byte(spec.ValuesYaml), &vals); err != nil {
-			return fmt.Errorf("failed to unmarshal values yaml: %w", err)
-		}
+	// Check values against the schema before running the action
+	_, err = util.CoalesceValues(chartRequested, spec.Values)
+	if err != nil {
+		return fmt.Errorf("failed to compute values: %w", err)
 	}
 
 	// Execute the action (Run does not take context in Helm 4)
-	_, err = client.Run(spec.ReleaseName, chartRequested, vals)
+	_, err = client.Run(spec.ReleaseName, chartRequested, spec.Values)
 	if err != nil {
 		return fmt.Errorf("failed to install or upgrade chart %s: %w", spec.ChartName, err)
 	}

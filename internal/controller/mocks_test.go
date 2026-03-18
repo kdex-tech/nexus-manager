@@ -12,7 +12,7 @@ type MockHelmClient struct {
 	utils.HelmClientInterface
 	InstalledCharts   []string
 	UninstalledCharts []string
-	ChartValues       map[string]string
+	ChartValues       map[string]any
 	ChartVersions     map[string]string
 	SimulateDelay     time.Duration
 	FailInstall       bool
@@ -34,9 +34,9 @@ func (m *MockHelmClient) InstallOrUpgrade(ctx context.Context, spec *utils.Chart
 	m.InstalledCharts = append(m.InstalledCharts, spec.ReleaseName)
 
 	if m.ChartValues == nil {
-		m.ChartValues = make(map[string]string)
+		m.ChartValues = make(map[string]any)
 	}
-	m.ChartValues[spec.ReleaseName] = spec.ValuesYaml
+	m.ChartValues[spec.ReleaseName] = spec.Values
 
 	if m.ChartVersions == nil {
 		m.ChartVersions = make(map[string]string)

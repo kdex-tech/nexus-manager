@@ -133,9 +133,21 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			Eventually(func() string {
-				return mockHelmClient.ChartValues[resourceName]
-			}, "10s", "1s").Should(ContainSubstring("enabled: false"), "Expected valkey to be disabled via values override")
+			Eventually(func() any {
+				v, ok := mockHelmClient.ChartValues[resourceName]
+				if !ok {
+					return true
+				}
+				vMap, ok := v.(map[string]any)
+				if !ok {
+					return true
+				}
+				vMap2, ok := vMap["valkey"].(map[string]any)
+				if !ok {
+					return true
+				}
+				return vMap2["enabled"]
+			}, "10s", "1s").Should(Equal(false), "Expected valkey to be disabled via values override")
 		})
 
 		It("it must not block reconciliation during slow helm installation", func() {
