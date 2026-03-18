@@ -139,7 +139,9 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		latestHost.Status.ObservedGeneration = host.Generation
 
 		if updateErr := r.Status().Patch(ctx, latestHost, patch); updateErr != nil {
-			if !errors.IsNotFound(updateErr) && !errors.IsConflict(updateErr) {
+			if errors.IsConflict(updateErr) {
+				res = ctrl.Result{RequeueAfter: 50 * time.Millisecond}
+			} else if !errors.IsNotFound(updateErr) {
 				log.Error(updateErr, "failed to patch status")
 				err = updateErr
 				res = ctrl.Result{}

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -78,9 +79,13 @@ func (r *KDexUtilityPageReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Defer status update
 	defer func() {
 		status.ObservedGeneration = om.Generation
-		if updateErr := r.Status().Update(ctx, o); updateErr != nil {
-			err = updateErr
-			res = ctrl.Result{}
+		updateErr := r.Status().Update(ctx, o)
+		if updateErr != nil {
+			if errors.IsConflict(updateErr) {
+				res = ctrl.Result{RequeueAfter: 50 * time.Millisecond}
+			} else {
+				err = updateErr
+			}
 		}
 
 		log.V(2).Info("status", "status", status, "err", err, "res", res)

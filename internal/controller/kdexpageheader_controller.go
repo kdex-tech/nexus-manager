@@ -23,6 +23,7 @@ import (
 
 	"os"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -78,9 +79,13 @@ func (r *KDexPageHeaderReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Defer status update
 	defer func() {
 		status.ObservedGeneration = om.Generation
-		if updateErr := r.Status().Update(ctx, o); updateErr != nil {
-			err = updateErr
-			res = ctrl.Result{}
+		updateErr := r.Status().Update(ctx, o)
+		if updateErr != nil {
+			if errors.IsConflict(updateErr) {
+				res = ctrl.Result{RequeueAfter: 50 * time.Millisecond}
+			} else {
+				err = updateErr
+			}
 		}
 
 		log.V(2).Info("status", "status", status, "err", err, "res", res)
