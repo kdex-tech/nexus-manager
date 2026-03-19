@@ -68,10 +68,9 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
-.PHONY: test
 TEST_PKGS ?= $(shell go list ./... | grep -v /e2e)
 TEST_ARGS ?=
-
+.PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 ifeq ($(DEBUG),true)
 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" dlv test $(TEST_PKGS) --headless --listen=:2345 --api-version=2 -- $(TEST_ARGS)
@@ -116,7 +115,7 @@ coverage: test ## Generate and view test coverage report.
 	@echo "--> Coverage report generated at file://$$(pwd)/cover.html"
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
+lint: golangci-lint lint-chart ## Run golangci-lint linter
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
@@ -233,7 +232,7 @@ lint-chart: copy-bundled-for-chart ## Lint chart.
 
 .PHONY: deploy-chart
 deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(HELM) upgrade nexus-manager ./chart \
+	$(HELM) upgrade nexus-operator ./chart \
 		--create-namespace \
 		--install \
 		--namespace kdex-nexus-system \
@@ -259,7 +258,7 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 
 .PHONY: undeploy-chart
 undeploy-chart: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(HELM) uninstall nexus-manager \
+	$(HELM) uninstall nexus-operator \
 		--namespace kdex-nexus-system
 
 ##@ Dependencies

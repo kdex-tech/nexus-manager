@@ -17,7 +17,6 @@ limitations under the License.
 package controller
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"maps"
@@ -35,7 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"kdex.dev/crds/configuration"
@@ -622,27 +620,6 @@ func (r *KDexHostReconciler) cleanupRbacFinalizers(ctx context.Context, host *kd
 	}
 
 	return nil
-}
-
-func (r *KDexHostReconciler) getConfiguration() (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	codecs := serializer.NewCodecFactory(r.Scheme)
-
-	info, ok := runtime.SerializerInfoForMediaType(codecs.SupportedMediaTypes(), "application/yaml")
-	if !ok {
-		return "", fmt.Errorf("no YAML serializer found")
-	}
-
-	encoder := codecs.EncoderForVersion(info.Serializer, configuration.GroupVersion)
-
-	var buf bytes.Buffer
-	if err := encoder.Encode(&r.Configuration, &buf); err != nil {
-		return "", fmt.Errorf("failed to encode object to YAML: %w", err)
-	}
-
-	return buf.String(), nil
 }
 
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
