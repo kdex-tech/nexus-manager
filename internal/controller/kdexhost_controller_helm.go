@@ -274,14 +274,23 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 		vals = util.CoalesceTables(overrideVals, vals)
 	}
 
-	chartName := "oci://ghcr.io/kdex-tech/charts/host-manager"
-	version := ""
+	hostDefault := r.Configuration.HostDefault
+	chartName := hostDefault.Chart.Name
+	version := hostDefault.Chart.Version
 
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil && host.Spec.Helm.HostManager.Version != "" {
 		version = host.Spec.Helm.HostManager.Version
 	}
 
+	// Set last so they override all other configurations
+
 	vals["fullnameOverride"] = host.Name
+
+	roleRef := map[string]string{}
+	roleRef["apiGroup"] = hostDefault.RoleRef.APIGroup
+	roleRef["kind"] = hostDefault.RoleRef.Kind
+	roleRef["name"] = hostDefault.RoleRef.Name
+	vals["roleRef"] = roleRef
 
 	spec := &utils.ChartSpec{
 		ReleaseName: host.Name,
