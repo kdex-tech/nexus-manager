@@ -232,10 +232,11 @@ lint-chart: copy-bundled-for-chart ## Lint chart.
 
 .PHONY: deploy-chart
 deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(HELM) upgrade nexus-operator ./chart \
+	$(HELM) upgrade kcnas-operator ./chart \
 		--create-namespace \
 		--install \
-		--namespace kdex-nexus-system \
+		--namespace kcnas-system \
+		--set fullnameOverride=kcnas-operator \
 		--set "config.backendDefault.serverImage=${REPOSITORY}kdex-tech/backend-static:latest" \
 		--set "config.backendDefault.serverImagePullPolicy=Always" \
 		--set "config.hostDefault.deployment.template.spec.containers[0].image=${REPOSITORY}kdex-tech/host-manager:latest" \
@@ -258,8 +259,8 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 
 .PHONY: undeploy-chart
 undeploy-chart: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(HELM) uninstall nexus-operator \
-		--namespace kdex-nexus-system
+	$(HELM) uninstall kcnas-operator \
+		--namespace kcnas-system
 
 ##@ Dependencies
 
