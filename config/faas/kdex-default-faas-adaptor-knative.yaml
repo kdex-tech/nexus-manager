@@ -1,6 +1,8 @@
 apiVersion: kdex.dev/v1alpha1
 kind: KDexClusterFaaSAdaptor
 metadata:
+  labels:
+    kdex.dev/default: "true"
   name: kdex-default-faas-adaptor-knative
 spec:
   deployer:
