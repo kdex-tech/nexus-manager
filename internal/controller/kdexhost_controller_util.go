@@ -85,7 +85,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalTranslation(
 		}
 	}
 
-	log := logf.FromContext(ctx)
+	log := logf.FromContext(ctx).WithName("translation")
 
 	log.V(2).Info(
 		"createOrUpdateInternalTranslation",
@@ -163,7 +163,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalUtilityPage(
 		}
 	}
 
-	log := logf.FromContext(ctx)
+	log := logf.FromContext(ctx).WithName("utilitypage")
 
 	log.V(2).Info(
 		"createOrUpdateInternalUtilityPage",

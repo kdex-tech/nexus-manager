@@ -1,13 +1,13 @@
 package utils
 
 import (
-	"context"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/action"
-	"helm.sh/helm/v4/pkg/chart/common/util"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
@@ -28,7 +28,7 @@ type ChartSpec struct {
 
 // HelmClientInterface defines the operations for Helm management.
 type HelmClientInterface interface {
-	InstallOrUpgrade(ctx context.Context, spec *ChartSpec) error
+	InstallOrUpgrade(spec *ChartSpec) error
 	Uninstall(releaseName string) error
 	AddRepository(name, url string) error
 }
@@ -81,15 +81,44 @@ func NewHelmClient(namespace string) (*HelmClient, error) {
 }
 
 // InstallOrUpgrade installs or upgrades a Helm chart.
-func (h *HelmClient) InstallOrUpgrade(ctx context.Context, spec *ChartSpec) error {
-	// Use Upgrade action with Install=true for "upgrade --install" behavior
-	client := action.NewUpgrade(h.actionConfig)
-	client.Install = true
-	client.Namespace = spec.Namespace
-	client.Version = spec.Version
+func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
+	// Check if release exists
+	exists, err := h.releaseExists(spec.ReleaseName)
+	if err != nil {
+		return fmt.Errorf("failed to check if release exists: %w", err)
+	}
 
-	// Helm 4 uses ServerSideApply as a string
-	client.ServerSideApply = "true"
+	if !exists {
+		return h.install(spec)
+	}
+	return h.upgrade(spec)
+}
+
+func (h *HelmClient) releaseExists(name string) (bool, error) {
+	_, err := h.actionConfig.Releases.Last(name)
+	if err != nil {
+		errStr := err.Error()
+		logf.Log.Info("helm: releaseExists check", "release", name, "err", errStr)
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "has no deployed releases") {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (h *HelmClient) install(spec *ChartSpec) error {
+	client := action.NewInstall(h.actionConfig)
+	client.ReleaseName = spec.ReleaseName
+	client.Namespace = spec.Namespace
+	client.CreateNamespace = false
+	client.SkipCRDs = !spec.UpgradeCRDs
+	client.WaitStrategy = "legacy"
+	client.Timeout = 5 * time.Minute
+
+	if spec.Version != "" {
+		client.Version = spec.Version
+	}
 
 	// Locate the chart
 	cp, err := client.LocateChart(spec.ChartName, h.settings)
@@ -103,16 +132,42 @@ func (h *HelmClient) InstallOrUpgrade(ctx context.Context, spec *ChartSpec) erro
 		return fmt.Errorf("failed to load chart %s: %w", spec.ChartName, err)
 	}
 
-	// Check values against the schema before running the action
-	_, err = util.CoalesceValues(chartRequested, spec.Values)
+	// Execute the action
+	_, err = client.Run(chartRequested, spec.Values)
 	if err != nil {
-		return fmt.Errorf("failed to compute values: %w", err)
+		return fmt.Errorf("failed to install chart %s: %w", spec.ChartName, err)
 	}
 
-	// Execute the action (Run does not take context in Helm 4)
+	return nil
+}
+
+func (h *HelmClient) upgrade(spec *ChartSpec) error {
+	client := action.NewUpgrade(h.actionConfig)
+	client.Namespace = spec.Namespace
+	client.SkipCRDs = !spec.UpgradeCRDs
+	client.WaitStrategy = "legacy"
+	client.Timeout = 5 * time.Minute
+
+	if spec.Version != "" {
+		client.Version = spec.Version
+	}
+
+	// Locate the chart
+	cp, err := client.LocateChart(spec.ChartName, h.settings)
+	if err != nil {
+		return fmt.Errorf("failed to locate chart %s: %w", spec.ChartName, err)
+	}
+
+	// Load the chart
+	chartRequested, err := loader.Load(cp)
+	if err != nil {
+		return fmt.Errorf("failed to load chart %s: %w", spec.ChartName, err)
+	}
+
+	// Execute the action
 	_, err = client.Run(spec.ReleaseName, chartRequested, spec.Values)
 	if err != nil {
-		return fmt.Errorf("failed to install or upgrade chart %s: %w", spec.ChartName, err)
+		return fmt.Errorf("failed to upgrade chart %s: %w", spec.ChartName, err)
 	}
 
 	return nil

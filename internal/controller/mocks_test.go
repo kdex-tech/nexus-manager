@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -19,7 +18,7 @@ type MockHelmClient struct {
 	FailMessage       string
 }
 
-func (m *MockHelmClient) InstallOrUpgrade(ctx context.Context, spec *utils.ChartSpec) error {
+func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 	if m.SimulateDelay > 0 {
 		time.Sleep(m.SimulateDelay)
 	}

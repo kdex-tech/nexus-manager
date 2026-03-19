@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/kdex-tech/nexus-manager/internal/controller"
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -111,6 +112,13 @@ func main() {
 		panic(err)
 	}
 	ctrl.SetLogger(logger)
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+
+	ctx := ctrl.SetupSignalHandler()
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -229,8 +237,13 @@ func main() {
 	if err := (&controller.KDexHostReconciler{
 		Client:        mgr.GetClient(),
 		Configuration: conf,
-		RequeueDelay:  requeueDelay,
-		Scheme:        mgr.GetScheme(),
+		ControllerID:  hostname,
+		Ctx:           ctx,
+		HelmClientFactory: func(namespace string) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace)
+		},
+		RequeueDelay: requeueDelay,
+		Scheme:       mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KDexHost")
 		os.Exit(1)
@@ -329,7 +342,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

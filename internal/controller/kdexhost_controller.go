@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,21 +53,29 @@ const (
 	hostIndexKey      = "spec.hostRef.name"
 )
 
+type helmOperation struct {
+	cancel     context.CancelFunc
+	generation int64
+}
+
 // KDexHostReconciler reconciles a KDexHost object
 type KDexHostReconciler struct {
 	client.Client
+	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
 	HelmClientFactory func(namespace string) (utils.HelmClientInterface, error)
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
-	mu sync.RWMutex
+	activeHelmOperations map[types.NamespacedName]helmOperation
+	mu                   sync.RWMutex
 }
 
 // nolint:gocyclo
 func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logf.FromContext(ctx)
+	log.Info("reconciling", "host", req.Name, "namespace", req.Namespace)
 
 	var host kdexv1alpha1.KDexHost
 	if err := r.Get(ctx, req.NamespacedName, &host); err != nil {
@@ -77,15 +84,6 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	if host.Status.Attributes == nil {
 		host.Status.Attributes = make(map[string]string)
-	}
-
-	// Check if helm already failed for this generation to avoid overwriting the failure status
-	helmStatus := host.Status.Attributes[AttributeHelmReleaseStatus]
-	helmGenStr := host.Status.Attributes[AttributeHelmReleaseGeneration]
-	helmGen, _ := strconv.ParseInt(helmGenStr, 10, 64)
-
-	if helmGen == host.Generation && helmStatus == HelmStatusFailed {
-		return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 	}
 
 	// Defer status update
@@ -269,6 +267,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	announcementRef, errorRef, loginRef, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
+		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)
 		if err == nil && r1.RequeueAfter > 0 {
 			return r1, nil
 		}
@@ -362,6 +361,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	translationRefs, shouldReturn, r1, err := r.resolveTranslations(ctx, &host)
 	if shouldReturn {
+		log.Info("resolveTranslations requested return", "requeueAfter", r1.RequeueAfter, "err", err)
 		if err == nil && r1.RequeueAfter > 0 {
 			return r1, nil
 		}
@@ -384,7 +384,8 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return r1, err
 	}
 
-	helmOp, err := r.reconcileHelmReleases(ctx, &host)
+	log.Info("calling reconcileHelmReleases", "host", host.Name)
+	helmOp, err := r.reconcileHelmReleases(ctx, &host, log)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -399,18 +400,41 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return ctrl.Result{}, err
 	}
 
-	// If helm failed or is in progress, we should not proceed to wait for deployment
-	// as it might overwrite the failure status or loop unnecessarily.
-	helmStatus = host.Status.Attributes[AttributeHelmReleaseStatus]
+	// Always update the internal host resource, even if Helm is in progress or failed.
+	// This ensures that utility page references and other attributes are updated in a timely manner,
+	// which is especially important for tests that monitor these attributes.
+	var internalHostOp controllerutil.OperationResult
+	var internalHost *kdexv1alpha1.KDexInternalHost
+	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, announcementRef, errorRef, loginRef, translationRefs)
+	if err != nil {
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionTrue,
+				Progressing: metav1.ConditionFalse,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconcileSuccess,
+			err.Error(),
+		)
+		return ctrl.Result{}, err
+	}
+
+	log.Info("reconciled", "host", host.Name, "namespace", host.Namespace, "helmOp", helmOp, "internalHostOp", internalHostOp)
+
+	// Sequential readiness checks:
+	// 1. Helm Operation Status
+	helmStatus := host.Status.Attributes[AttributeHelmReleaseStatus]
 	if helmStatus == HelmStatusInProgress {
+		log.V(2).Info("helm in progress", "host", host.Name, "namespace", host.Namespace)
 		return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 	}
 	if helmStatus == HelmStatusFailed {
-		// Helm failed, we already set conditions in updateHelmStatus
+		log.V(2).Info("helm failed", "host", host.Name, "namespace", host.Namespace)
 		return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 	}
 
-	// We still need to wait for the deployment to be ready.
+	// 2. Deployment Status
 	// Since we are using Helm, we'll query the deployment created by Helm.
 	deployment := &appsv1.Deployment{}
 	err = r.Get(ctx, req.NamespacedName, deployment)
@@ -447,23 +471,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		}
 	}
 
-	var internalHostOp controllerutil.OperationResult
-	var internalHost *kdexv1alpha1.KDexInternalHost
-	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, announcementRef, errorRef, loginRef, translationRefs)
-	if err != nil {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileSuccess,
-			err.Error(),
-		)
-		return ctrl.Result{}, err
-	}
-
+	// 3. Internal Host Readiness
 	if meta.IsStatusConditionFalse(internalHost.Status.Conditions, string(kdexv1alpha1.ConditionTypeReady)) {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -475,7 +483,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			kdexv1alpha1.ConditionReasonReconcileSuccess,
 			"Waiting for internal host to be ready.",
 		)
-		return ctrl.Result{RequeueAfter: r.RequeueDelay}, err
+		return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 	}
 
 	if val, ok := internalHost.Status.Attributes["ingress"]; ok {

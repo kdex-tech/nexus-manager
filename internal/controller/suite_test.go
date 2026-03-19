@@ -206,6 +206,7 @@ var _ = BeforeSuite(func() {
 	// Host
 	hostReconciler = &KDexHostReconciler{
 		Client:        k8sManager.GetClient(),
+		ControllerID:  "test-controller",
 		Ctx:           ctx,
 		Configuration: configuration,
 		RequeueDelay:  0,

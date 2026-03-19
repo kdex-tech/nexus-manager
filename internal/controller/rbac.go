@@ -1,6 +1,7 @@
 package controller
 
 // +kubebuilder:rbac:groups=apps,resources=deployments,                                 verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=replicasets,                                 verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,                                       verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,                                   verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,                                  verbs=get;list;watch;create;update;patch;delete

@@ -82,13 +82,15 @@ func (r *KDexPageHeaderReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		updateErr := r.Status().Update(ctx, o)
 		if updateErr != nil {
 			if errors.IsConflict(updateErr) {
+				err = nil
 				res = ctrl.Result{RequeueAfter: 50 * time.Millisecond}
 			} else {
 				err = updateErr
+				res = ctrl.Result{}
 			}
 		}
 
-		log.V(2).Info("status", "status", status, "err", err, "res", res)
+		log.V(3).Info("status", "status", status, "err", err, "res", res)
 	}()
 
 	kdexv1alpha1.SetConditions(
