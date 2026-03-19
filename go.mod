@@ -2,7 +2,7 @@ module github.com/kdex-tech/nexus-manager
 
 go 1.26.0
 
-replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.186
+replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.187
 
 require (
 	github.com/go-logr/logr v1.4.3
@@ -16,7 +16,6 @@ require (
 	k8s.io/client-go v0.35.2
 	kdex.dev/crds v0.0.0-00010101000000-000000000000
 	sigs.k8s.io/controller-runtime v0.23.1
-	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -195,4 +194,5 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.21.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
