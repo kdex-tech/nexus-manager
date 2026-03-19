@@ -43,7 +43,8 @@ runs:
       export CHART_VERSION=$(echo ${{ github.ref }} | sed -e 's,.*/v\(.*\),\1,')
       make copy-bundled-for-chart
       helm dependency update chart
-      helm package --app-version ${CHART_VERSION} --version ${CHART_VERSION} -d dist dist/chart
+      mkdir -p dist
+      helm package --app-version ${CHART_VERSION} --version ${CHART_VERSION} -d dist chart
 
   - name: Log in to registry with Helm
     shell: bash

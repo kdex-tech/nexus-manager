@@ -7,7 +7,6 @@ controllerManager:
       tag: ""
     imagePullPolicy: IfNotPresent
     args:
-    - "--named-log-level=npm-registry=2"
     - "--leader-elect"
     - "--metrics-bind-address=:8443"
     - "--health-probe-bind-address=:8081"
@@ -60,7 +59,7 @@ config:
       kind: ClusterRole
       name: host-controller-role
   packages:
-    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.8
+    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.9
     packagerImagePullPolicy: IfNotPresent
     toolsImage: ghcr.io/kdex-tech/node-tools:0.1.2
     toolsImagePullPolicy: IfNotPresent

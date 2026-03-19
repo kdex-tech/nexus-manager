@@ -198,11 +198,11 @@ CRDS_DIR = $(shell go list -m -f '{{.Dir}}' kdex.dev/crds)
 
 .PHONY: copy-crds-for-chart
 copy-crds-for-chart: ## Install CRDs from the kdex-crds module.
-	rm -rf dist/chart/crds && mkdir -p dist/chart/crds && cp $(CRDS_DIR)/config/crd/bases/* dist/chart/crds
+	rm -rf chart/crds && mkdir -p chart/crds && cp $(CRDS_DIR)/config/crd/bases/* chart/crds
 
 .PHONY: copy-bundled-for-chart
 copy-bundled-for-chart: ## Install Bundled CRs.
-	rm -rf dist/chart/templates/bundled && mkdir -p dist/chart/templates/bundled && cp config/bundled/kdex*.yaml dist/chart/templates/bundled
+	rm -rf chart/templates/bundled && mkdir -p chart/templates/bundled && cp config/bundled/kdex*.yaml chart/templates/bundled
 
 .PHONY: install
 install: kustomize ## Install CRDs from the kdex-crds module.
@@ -229,17 +229,14 @@ update-chart: copy-bundled-for-chart ## Update chart with bundled CRs.
 
 .PHONY: lint-chart
 lint-chart: copy-bundled-for-chart ## Lint chart.
-	$(HELM) lint ./dist/chart
+	$(HELM) lint ./chart
 
 .PHONY: deploy-chart
 deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	$(HELM) upgrade nexus-manager ./dist/chart \
+	$(HELM) upgrade nexus-manager ./chart \
 		--create-namespace \
 		--install \
 		--namespace kdex-nexus-system \
-		--set "controllerManager.container.image.repository=${REPOSITORY}${IMG}" \
-		--set "controllerManager.container.image.tag=latest" \
-		--set "controllerManager.container.imagePullPolicy=Always" \
 		--set "config.backendDefault.serverImage=${REPOSITORY}kdex-tech/backend-static:latest" \
 		--set "config.backendDefault.serverImagePullPolicy=Always" \
 		--set "config.hostDefault.deployment.template.spec.containers[0].image=${REPOSITORY}kdex-tech/host-manager:latest" \
@@ -247,7 +244,18 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 		--set "config.packages.packagerImage=${REPOSITORY}kdex-tech/cli-tools:latest" \
 		--set "config.packages.packagerImagePullPolicy=Always" \
 		--set "config.packages.toolsImage=${REPOSITORY}kdex-tech/node-tools:latest" \
-		--set "config.packages.toolsImagePullPolicy=Always"
+		--set "config.packages.toolsImagePullPolicy=Always" \
+		--set "controllerManager.container.image.repository=${REPOSITORY}${IMG}" \
+		--set "controllerManager.container.image.tag=latest" \
+		--set "controllerManager.container.imagePullPolicy=Always" \
+		--set "controllerManager.container.args[3]=--zap-log-level=info" \
+		--set "controllerManager.container.args[4]=--named-log-level=helm=3" \
+		--set "controllerManager.container.args[5]=--named-log-level=kdexhost=3" \
+		--set "controllerManager.container.args[6]=--named-log-level=kdexhost.translation=info" \
+		--set "controllerManager.container.args[7]=--named-log-level=kdexhost.utilitypage=info" \
+		--set "controllerManager.container.args[8]=--named-log-level=kdexhost.watch=info" \
+		--set "controllerManager.container.args[9]=--named-log-level=npm-registry=2"
+
 
 .PHONY: undeploy-chart
 undeploy-chart: ## Deploy controller to the K8s cluster specified in ~/.kube/config.

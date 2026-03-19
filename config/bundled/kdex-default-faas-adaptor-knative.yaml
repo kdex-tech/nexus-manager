@@ -32,7 +32,7 @@ spec:
   generators:
   - entrypoint: "./cmd/main.go"
     git:
-      image: ghcr.io/kdex-tech/cli-tools:0.3.4
+      image: ghcr.io/kdex-tech/cli-tools:0.3.9
       committerEmail: test@kdex.dev
       committerName: KDex Codegen Bot
     image: ghcr.io/kdex-tech/fngogen:0.1.1

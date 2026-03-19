@@ -100,14 +100,14 @@ kubectl apply -f https://raw.githubusercontent.com/kdex-tech/nexus-manager/<tag 
 kubebuilder edit --plugins=helm/v1-alpha
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
+2. See that a chart was generated under 'chart', and users
 can obtain this solution from there.
 
 **NOTE:** If you change the project, you need to update the Helm Chart
 using the same command above to sync the latest changes. Furthermore,
 if you create webhooks, you need to use the above command with
 the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
+previously added to 'chart/values.yaml' or 'chart/manager/manager.yaml'
 is manually re-applied afterwards.
 
 ## Contributing

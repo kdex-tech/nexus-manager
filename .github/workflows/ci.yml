@@ -86,7 +86,7 @@ jobs:
 
     - name: Lint Helm Chart
       run: |
-        helm lint ./dist/chart
+        helm lint ./chart
 
     - name: Build and load nexus-manager image
       run: |
@@ -108,7 +108,7 @@ jobs:
     - name: Install Helm chart for project
       run: |
         make copy-crds-for-chart copy-bundled-for-chart
-        helm install my-release ./dist/chart \
+        helm install my-release ./chart \
           --create-namespace \
           --namespace kdex-nexus-system \
           --set controllerManager.container.image.repository=kdex-tech/nexus-manager \
