@@ -39,7 +39,6 @@ controllerManager:
     runAsUser: 65532
     seccompProfile:
       type: RuntimeDefault
-  serviceAccountName: kdex-nexus-controller-manager
   terminationGracePeriodSeconds: 10
 
 # [CONFIG]: Configuration for the controller-manager
@@ -47,17 +46,6 @@ config:
   backendDefault:
     serverImage: ghcr.io/kdex-tech/backend-static:0.1.5
     serverImagePullPolicy: IfNotPresent
-  hostDefault:
-    deployment:
-      template:
-        spec:
-          containers:
-          - image: ghcr.io/kdex-tech/host-manager:0.2.9
-            imagePullPolicy: IfNotPresent
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: ClusterRole
-      name: host-controller-role
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.9
     packagerImagePullPolicy: IfNotPresent
@@ -71,18 +59,14 @@ extraChartLabels: {}
 rbac:
   enable: true
 
-# [CRDs]: To enable the CRDs
-crd:
-  # This option determines whether the CRDs are included
-  # in the installation process.
-  enable: false
-
-  # Enabling this option adds the "helm.sh/resource-policy": keep
-  # annotation to the CRD, ensuring it remains installed even when
-  # the Helm release is uninstalled.
-  # NOTE: Removing the CRDs will also remove all cert-manager CR(s)
-  # (Certificates, Issuers, ...) due to garbage collection.
-  keep: true
+serviceAccount:
+  # Annotations to add to the service account
+  annotations: {}
+  # Specifies whether a service account should be created
+  create: true
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
 
 # [METRICS]: Set to true to generate manifests for exporting metrics.
 # To disable metrics export set false, and ensure that the

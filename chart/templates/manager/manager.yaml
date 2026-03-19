@@ -5,22 +5,21 @@ metadata:
     checksum/config: {{ .Values.config | toJson | sha256sum }}
     checksum/controllerConfig: {{ .Values.controllerConfig | toJson | sha256sum }}
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: kdex-nexus-controller-manager
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 spec:
   replicas:  {{ .Values.controllerManager.replicas }}
   selector:
     matchLabels:
-      {{- include "chart.selectorLabels" . | nindent 6 }}
+      {{- include "kcnas-operator.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
         checksum/config: {{ .Values.config | toJson | sha256sum }}
         checksum/controllerConfig: {{ .Values.controllerConfig | toJson | sha256sum }}
-        kubectl.kubernetes.io/default-container: manager
       labels:
-        {{- include "chart.labels" . | nindent 8 }}
+        {{- include "kcnas-operator.labels" . | nindent 8 }}
         {{- if and .Values.controllerManager.pod .Values.controllerManager.pod.labels }}
         {{- range $key, $value := .Values.controllerManager.pod.labels }}
         {{ $key }}: {{ $value }}
@@ -80,13 +79,13 @@ spec:
           {{- end }}
       securityContext:
         {{- toYaml .Values.controllerManager.securityContext | nindent 8 }}
-      serviceAccountName: {{ .Values.controllerManager.serviceAccountName }}
+      serviceAccountName: {{ include "kcnas-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.controllerManager.terminationGracePeriodSeconds }}
       {{- if and .Values.certmanager.enable (or .Values.webhook.enable .Values.metrics.enable) }}
       volumes:
         - name: config
           configMap:
-            name: kdex-nexus-controller-manager
+            name: {{ include "kcnas-operator.fullname" . }}
         - name: podinfo
           downwardAPI:
             items:
@@ -96,11 +95,11 @@ spec:
         {{- if and .Values.webhook.enable .Values.certmanager.enable }}
         - name: webhook-cert
           secret:
-            secretName: webhook-server-cert
+            secretName: {{ include "kcnas-operator.fullname" . }}-webhook-server
         {{- end }}
         {{- if and .Values.metrics.enable .Values.certmanager.enable }}
         - name: metrics-certs
           secret:
-            secretName: metrics-server-cert
+            secretName: {{ include "kcnas-operator.fullname" . }}-metrics-server
         {{- end }}
       {{- end }}

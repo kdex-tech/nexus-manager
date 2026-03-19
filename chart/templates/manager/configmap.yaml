@@ -2,8 +2,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: kdex-nexus-controller-manager
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 data:
   config.yaml: |

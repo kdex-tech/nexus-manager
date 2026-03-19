@@ -4,8 +4,8 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: nexus-manager-controller-manager-metrics-monitor
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}-metrics
   namespace: {{ .Release.Namespace }}
 spec:
   endpoints:
@@ -15,19 +15,19 @@ spec:
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
         {{- if .Values.certmanager.enable }}
-        serverName: nexus-manager-controller-manager-metrics-service.{{ .Release.Namespace }}.svc
+        serverName: {{ include "kcnas-operator.fullname" . }}-metrics.{{ .Release.Namespace }}.svc
         # Apply secure TLS configuration with cert-manager
         insecureSkipVerify: false
         ca:
           secret:
-            name: metrics-server-cert
+            name: {{ include "kcnas-operator.fullname" . }}-metrics-server
             key: ca.crt
         cert:
           secret:
-            name: metrics-server-cert
+            name: {{ include "kcnas-operator.fullname" . }}-metrics-server
             key: tls.crt
         keySecret:
-          name: metrics-server-cert
+          name: {{ include "kcnas-operator.fullname" . }}-metrics-server
           key: tls.key
         {{- else }}
         # Development/Test mode (insecure configuration)
@@ -35,5 +35,5 @@ spec:
         {{- end }}
   selector:
     matchLabels:
-      {{- include "chart.selectorLabels" . | nindent 6 }}
+      {{- include "kcnas-operator.selectorLabels" . | nindent 6 }}
 {{- end }}

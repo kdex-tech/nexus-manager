@@ -4,8 +4,8 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: selfsigned-issuer
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}
   namespace: {{ .Release.Namespace }}
 spec:
   selfSigned: {}
@@ -16,26 +16,24 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   annotations:
-    {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
-    {{- end }}
-  name: serving-cert
+  name: {{ include "kcnas-operator.fullname" . }}-serving
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
 spec:
   dnsNames:
-    - nexus-manager.{{ .Release.Namespace }}.svc
-    - nexus-manager.{{ .Release.Namespace }}.svc.cluster.local
-    - nexus-manager-webhook-service.{{ .Release.Namespace }}.svc
+    - {{ include "kcnas-operator.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "kcnas-operator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+    - {{ include "kcnas-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
   issuerRef:
     kind: Issuer
-    name: selfsigned-issuer
+    name: {{ include "kcnas-operator.fullname" . }}
   privateKey:
     rotationPolicy: Always
     algorithm: ECDSA
     size: 256
-  secretName: webhook-server-cert
+  secretName: {{ include "kcnas-operator.fullname" . }}-webhook-server
 {{- end }}
 {{- if .Values.metrics.enable }}
 ---
@@ -44,25 +42,23 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   annotations:
-    {{- if .Values.crd.keep }}
     "helm.sh/resource-policy": keep
-    {{- end }}
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: metrics-certs
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}-metrics
   namespace: {{ .Release.Namespace }}
 spec:
   dnsNames:
-    - nexus-manager.{{ .Release.Namespace }}.svc
-    - nexus-manager.{{ .Release.Namespace }}.svc.cluster.local
-    - nexus-manager-metrics-service.{{ .Release.Namespace }}.svc
+    - {{ include "kcnas-operator.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "kcnas-operator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+    - {{ include "kcnas-operator.fullname" . }}-metrics.{{ .Release.Namespace }}.svc
   issuerRef:
     kind: Issuer
-    name: selfsigned-issuer
+    name: {{ include "kcnas-operator.fullname" . }}
   privateKey:
     rotationPolicy: Always
     algorithm: ECDSA
     size: 256
-  secretName: metrics-server-cert
+  secretName: {{ include "kcnas-operator.fullname" . }}-metrics-server
 {{- end }}
 {{- end }}

@@ -4,8 +4,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: nexus-manager-leader-election-role
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}-leader-election
   namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups:

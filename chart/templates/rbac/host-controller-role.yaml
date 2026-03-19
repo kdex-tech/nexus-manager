@@ -3,8 +3,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: host-controller-role
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}-host-controller
 rules:
 - apiGroups:
   - ""

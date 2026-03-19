@@ -8,7 +8,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	"helm.sh/helm/v4/pkg/chart/common"
-	"helm.sh/helm/v4/pkg/chart/common/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -257,21 +256,14 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 
 func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost) error {
 	// We need to pass the configuration to the chart via values.
-	configString, err := r.getConfiguration()
-	if err != nil {
-		return err
-	}
+	vals := map[string]any{}
 
-	vals, err := common.ReadValues([]byte(configString))
-	if err != nil {
-		return err
-	}
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
-		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
+		var err error
+		vals, err = common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
 		if err != nil {
 			return err
 		}
-		vals = util.CoalesceTables(overrideVals, vals)
 	}
 
 	hostDefault := r.Configuration.HostDefault
@@ -287,9 +279,9 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 	vals["fullnameOverride"] = host.Name
 
 	roleRef := map[string]string{}
-	roleRef["apiGroup"] = hostDefault.RoleRef.APIGroup
-	roleRef["kind"] = hostDefault.RoleRef.Kind
-	roleRef["name"] = hostDefault.RoleRef.Name
+	roleRef["apiGroup"] = "rbac.authorization.k8s.io"
+	roleRef["kind"] = "ClusterRole"
+	roleRef["name"] = host.Name + "-host-controller"
 	vals["roleRef"] = roleRef
 
 	spec := &utils.ChartSpec{

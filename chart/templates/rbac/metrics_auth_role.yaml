@@ -3,8 +3,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    {{- include "chart.labels" . | nindent 4 }}
-  name: nexus-manager-metrics-auth-role
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: {{ include "kcnas-operator.fullname" . }}-metrics-auth
 rules:
 - apiGroups:
   - authentication.k8s.io
