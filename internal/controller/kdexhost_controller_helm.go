@@ -276,6 +276,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 
 	// Set last so they override all other configurations
 
+	vals["focalHost"] = host.Name
 	vals["fullnameOverride"] = host.Name
 
 	roleRef := map[string]string{}
