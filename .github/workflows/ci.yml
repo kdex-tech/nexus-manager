@@ -14,9 +14,6 @@ on:
     - "**"
     - "!docs/**"
 
-env:
-  LC_ALL: en_US.UTF-8
-
 defaults:
   run:
     shell: bash
@@ -63,7 +60,7 @@ jobs:
 
     - name: Install the latest version of kind
       run: |
-        curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+        curl -sLo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
 
@@ -77,9 +74,20 @@ jobs:
       run: |
         go mod tidy
 
+    - name: Install kubectl
+      run: |
+        OS=$(go env GOOS)
+        ARCH=$(go env GOARCH)
+        VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+        echo "Downloading kubectl $VERSION for $OS/$ARCH..."
+        curl -sLO "https://dl.k8s.io/release/$VERSION/bin/$OS/$ARCH/kubectl"
+        chmod +x ./kubectl
+        sudo mv ./kubectl /usr/local/bin/kubectl
+        kubectl version --client
+
     - name: Install Helm
       run: |
-        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
 
     - name: Verify Helm installation
       run: helm version
@@ -105,24 +113,28 @@ jobs:
         kubectl wait --namespace cert-manager --for=condition=available --timeout=300s deployment/cert-manager-cainjector
         kubectl wait --namespace cert-manager --for=condition=available --timeout=300s deployment/cert-manager-webhook
 
+    - name: Install the KDex CRDs
+      run: |
+        make install-crds
+
     - name: Install Helm chart for project
       run: |
-        make copy-crds-for-chart copy-bundled-for-chart
-        helm install my-release ./chart \
+        make copy-bundled-for-chart
+        helm install kcnas-operator ./chart \
           --create-namespace \
-          --namespace kdex-nexus-system \
+          --namespace kcnas-operator \
+          --set fullnameOverride=kcnas-operator \
           --set controllerManager.container.image.repository=kdex-tech/nexus-manager \
           --set controllerManager.container.image.tag=ci \
-          --set controllerManager.container.image.pullPolicy=Always \
-          --set crd.enable=true
+          --set controllerManager.container.image.pullPolicy=Always
 
     - name: Check Helm release status
       run: |
-        helm status my-release --namespace kdex-nexus-system
+        helm status kcnas-operator --namespace kcnas-operator
 
     - name: Verify controller manager is READY
       run: |
-        kubectl -n kdex-nexus-system rollout status deployment kdex-nexus-controller-manager
+        kubectl -n kcnas-operator rollout status deployment kcnas-operator
 
     - name: Display the status of the bundled CRs
       run: |

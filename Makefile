@@ -195,9 +195,9 @@ endif
 
 CRDS_DIR = $(shell go list -m -f '{{.Dir}}' kdex.dev/crds)
 
-.PHONY: copy-crds-for-chart
-copy-crds-for-chart: ## Install CRDs from the kdex-crds module.
-	rm -rf chart/crds && mkdir -p chart/crds && cp $(CRDS_DIR)/config/crd/bases/* chart/crds
+.PHONY: install-crds
+install-crds: ## Install CRDs from the kdex-crds module.
+	kubectl apply -f $(CRDS_DIR)/config/crd/bases/
 
 .PHONY: copy-bundled-for-chart
 copy-bundled-for-chart: ## Install Bundled CRs.
