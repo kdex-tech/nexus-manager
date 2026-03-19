@@ -49,7 +49,7 @@ runs:
   - name: Log in to registry with Helm
     shell: bash
     run: |
-      echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io/${{ github.repository }} --username ${{ github.actor }} --password-stdin
+      echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
   - name: Log in to registry with Oras
     shell: bash
