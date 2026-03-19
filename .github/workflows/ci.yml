@@ -126,7 +126,7 @@ jobs:
           --set fullnameOverride=kcnas-operator \
           --set controllerManager.container.image.repository=kdex-tech/nexus-manager \
           --set controllerManager.container.image.tag=ci \
-          --set controllerManager.container.image.pullPolicy=Always
+          --set controllerManager.container.imagePullPolicy=IfNotPresent
 
     - name: Check Helm release status
       run: |
