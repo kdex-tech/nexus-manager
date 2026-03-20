@@ -49,7 +49,7 @@ runs:
   - name: Log in to registry with Helm
     shell: bash
     run: |
-      echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+      echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
   - name: Log in to registry with Oras
     shell: bash
@@ -66,7 +66,7 @@ runs:
       for f in *.tgz ; do
           echo "$f"
           helm push "$f" "$OCI_URL"
-          oras tag "${REGISTRY_URL}/host-manager:${CHART_VERSION}" latest
+          oras tag "${REGISTRY_URL}/kcnas-operator:${CHART_VERSION}" latest
       done
   #
   # - name: Install YQ
@@ -90,11 +90,11 @@ runs:
   #     ./.github/scripts/publish_helm_index.sh
   #   env:
   #     GIT_REPOSITORY: ${{ github.repository }}
-  #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #     GH_TOKEN: ${{ github.token }}
   #     INDEX_DIR: charts
   #     OWNER: ${{ github.actor }}
   #     PUBLISH_BRANCH: gh-pages
-  #     REPO_URL: "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+  #     REPO_URL: "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
   #     REPOSITORY: ${{ github.event.repository.name }}
 
   # - name: Trigger Deploy GitHub Pages
@@ -103,7 +103,7 @@ runs:
   #   run: |
   #     ./.github/scripts/trigger_workflow.sh
   #   env:
-  #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #     GH_TOKEN: ${{ github.token }}
   #     GIT_REPOSITORY: ${{ github.repository }}
   #     PUBLISH_BRANCH: gh-pages
   #     WORKFLOW_NAME: "Deploy GitHub Pages"
