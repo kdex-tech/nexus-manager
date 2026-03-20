@@ -239,8 +239,8 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 		--set fullnameOverride=kcnas-operator \
 		--set "config.backendDefault.serverImage=${REPOSITORY}kdex-tech/backend-static:latest" \
 		--set "config.backendDefault.serverImagePullPolicy=Always" \
-		--set "config.hostDefault.deployment.template.spec.containers[0].image=${REPOSITORY}kdex-tech/host-manager:latest" \
-		--set "config.hostDefault.deployment.template.spec.containers[0].imagePullPolicy=Always" \
+		--set "config.hostDefault.chart.name=oci://${REPOSITORY}kdex-tech/host-manager" \
+		--set "config.hostDefault.chart.version=0.0.1-local" \
 		--set "config.packages.packagerImage=${REPOSITORY}kdex-tech/cli-tools:latest" \
 		--set "config.packages.packagerImagePullPolicy=Always" \
 		--set "config.packages.toolsImage=${REPOSITORY}kdex-tech/node-tools:latest" \
