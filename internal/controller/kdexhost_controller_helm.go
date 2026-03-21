@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -8,10 +9,14 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	"helm.sh/helm/v4/pkg/chart/common"
+	"helm.sh/helm/v4/pkg/chart/common/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"kdex.dev/crds/configuration"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -26,6 +31,27 @@ const (
 	HelmStatusCompleted  = "completed"
 	HelmStatusFailed     = "failed"
 )
+
+func (r *KDexHostReconciler) getConfiguration() ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	codecs := serializer.NewCodecFactory(r.Scheme)
+
+	info, ok := runtime.SerializerInfoForMediaType(codecs.SupportedMediaTypes(), "application/yaml")
+	if !ok {
+		return nil, fmt.Errorf("no YAML serializer found")
+	}
+
+	encoder := codecs.EncoderForVersion(info.Serializer, configuration.GroupVersion)
+
+	var buf bytes.Buffer
+	if err := encoder.Encode(&r.Configuration, &buf); err != nil {
+		return nil, fmt.Errorf("failed to encode object to YAML: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
 
 func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName, cancel context.CancelFunc, generation int64) bool {
 	r.mu.Lock()
@@ -265,15 +291,26 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 }
 
 func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost) error {
-	// We need to pass the configuration to the chart via values.
+	configBytes, err := r.getConfiguration()
+	if err != nil {
+		return err
+	}
+
+	configVals, err := common.ReadValues(configBytes)
+	if err != nil {
+		return err
+	}
+
+	// Shift configVals down to the "config" key which matches the chart
 	vals := map[string]any{}
+	vals["config"] = configVals
 
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
-		var err error
-		vals, err = common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
+		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
 		if err != nil {
 			return err
 		}
+		vals = util.CoalesceTables(overrideVals, vals)
 	}
 
 	hostDefault := r.Configuration.HostDefault
