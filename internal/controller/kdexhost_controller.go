@@ -30,7 +30,6 @@ import (
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -173,7 +172,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			if err := r.Update(ctx, &host); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 		}
 	} else {
 		if controllerutil.ContainsFinalizer(&host, hostFinalizerName) {
@@ -186,7 +185,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					}
 				}
 				// KDexInternalHost still exists. We wait.
-				return ctrl.Result{Requeue: true}, nil
+				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
 			if !errors.IsNotFound(err) {
 				return ctrl.Result{}, err
@@ -206,7 +205,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					}
 				}
 				// KDexInternalUtilityPage still exists. We wait.
-				return ctrl.Result{Requeue: true}, nil
+				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
 
 			// Wait for internal translations to be gone
@@ -223,47 +222,30 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					}
 				}
 				// KDexInternalTranslation still exists. We wait.
-				return ctrl.Result{Requeue: true}, nil
+				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
 
-			deployment := &appsv1.Deployment{}
-			err = r.Get(ctx, req.NamespacedName, deployment)
-			if err == nil {
-				if deployment.DeletionTimestamp.IsZero() {
-					// Instead of deleting directly, we'll uninstall the Helm releases
-					c, err := r.HelmClientFactory(
-						host.Namespace,
-						host.Spec.ServiceAccountSecrets,
-						log.WithName("helm"),
-					)
-					if err != nil {
-						return ctrl.Result{}, err
-					}
+			c, err := r.HelmClientFactory(
+				host.Namespace,
+				host.Spec.ServiceAccountSecrets,
+				log.WithName("helm"),
+			)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
 
-					// Uninstall companion charts
-					if host.Spec.Helm != nil {
-						for _, companion := range host.Spec.Helm.CompanionCharts {
-							if err := c.Uninstall(companion.Name); err != nil {
-								log.Error(err, "failed to uninstall companion release", "name", companion.Name)
-							}
-						}
-					}
+			// Uninstall host manager chart
+			if err := c.Uninstall(host.Name); err != nil {
+				log.Error(err, "failed to uninstall host manager release", "name", host.Name)
+			}
 
-					// Uninstall host manager chart
-					if err := c.Uninstall(host.Name); err != nil {
-						log.Error(err, "failed to uninstall host manager release", "name", host.Name)
+			// Uninstall companion charts
+			if host.Spec.Helm != nil {
+				for _, companion := range host.Spec.Helm.CompanionCharts {
+					if err := c.Uninstall(companion.Name); err != nil {
+						log.Error(err, "failed to uninstall companion release", "name", companion.Name)
 					}
 				}
-				// Deployment still exists. We wait.
-				return ctrl.Result{Requeue: true}, nil
-			}
-			if !errors.IsNotFound(err) {
-				return ctrl.Result{}, err
-			}
-
-			// Deployment is gone. Clean up RBAC finalizers.
-			if err := r.cleanupRbacFinalizers(ctx, &host); err != nil {
-				return ctrl.Result{}, err
 			}
 
 			controllerutil.RemoveFinalizer(&host, hostFinalizerName)
@@ -570,14 +552,9 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kdexv1alpha1.KDexHost{}).
-		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Service{}).
-		Owns(&corev1.ServiceAccount{}).
 		Owns(&kdexv1alpha1.KDexInternalHost{}).
 		Owns(&kdexv1alpha1.KDexInternalTranslation{}).
 		Owns(&kdexv1alpha1.KDexInternalUtilityPage{}).
-		Owns(&rbacv1.ClusterRoleBinding{}).
 		Watches(
 			&kdexv1alpha1.KDexScriptLibrary{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.ScriptLibraryRef}")).
@@ -613,35 +590,6 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Named("kdexhost").
 		Complete(r)
-}
-
-func (r *KDexHostReconciler) cleanupRbacFinalizers(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
-	// ClusterRoleBinding
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
-	clusterRoleBinding.Name = fmt.Sprintf("%s-%s", host.Name, host.Namespace)
-	if err := r.Get(ctx, types.NamespacedName{Name: clusterRoleBinding.Name}, clusterRoleBinding); err == nil {
-		if controllerutil.RemoveFinalizer(clusterRoleBinding, hostFinalizerName) {
-			if err := r.Update(ctx, clusterRoleBinding); err != nil {
-				return err
-			}
-		}
-	} else if !errors.IsNotFound(err) {
-		return err
-	}
-
-	// ServiceAccount
-	serviceAccount := &corev1.ServiceAccount{}
-	if err := r.Get(ctx, types.NamespacedName{Name: host.Name, Namespace: host.Namespace}, serviceAccount); err == nil {
-		if controllerutil.RemoveFinalizer(serviceAccount, hostFinalizerName) {
-			if err := r.Update(ctx, serviceAccount); err != nil {
-				return err
-			}
-		}
-	} else if !errors.IsNotFound(err) {
-		return err
-	}
-
-	return nil
 }
 
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
