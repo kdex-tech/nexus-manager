@@ -308,6 +308,10 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 	vals := map[string]any{}
 	vals["config"] = configVals
 
+	if len(host.Spec.Env) != 0 {
+		vals["env"] = host.Spec.Env
+	}
+
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
 		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
 		if err != nil {
