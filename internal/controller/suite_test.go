@@ -20,13 +20,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -212,7 +212,7 @@ var _ = BeforeSuite(func() {
 		Configuration: configuration,
 		RequeueDelay:  0,
 		Scheme:        k8sManager.GetScheme(),
-		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error) {
 			return &MockHelmClient{}, nil
 		},
 	}

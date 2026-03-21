@@ -3,13 +3,13 @@ package utils
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
@@ -18,7 +18,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/auth"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ChartSpec defines the parameters for a Helm chart installation or upgrade.
@@ -43,6 +42,7 @@ type HelmClientInterface interface {
 type HelmClient struct {
 	settings     *cli.EnvSettings
 	actionConfig *action.Configuration
+	log          logr.Logger
 	namespace    string
 	mu           sync.RWMutex
 	secrets      kdexv1alpha1.ServiceAccountSecrets
@@ -54,12 +54,12 @@ var _ HelmClientInterface = (*HelmClient)(nil)
 func NewHelmClient(
 	namespace string,
 	secrets kdexv1alpha1.ServiceAccountSecrets,
-	h slog.Handler,
+	logger logr.Logger,
 ) (*HelmClient, error) {
 	settings := cli.New()
 
 	actionConfig := action.NewConfiguration(
-		action.ConfigurationSetLogger(h))
+		action.ConfigurationSetLogger(logr.ToSlogHandler(logger)))
 
 	// Use secret driver by default
 	helmDriver := os.Getenv("HELM_DRIVER")
@@ -77,6 +77,7 @@ func NewHelmClient(
 
 	return &HelmClient{
 		actionConfig: actionConfig,
+		log:          logger,
 		namespace:    namespace,
 		secrets:      secrets,
 		settings:     settings,
@@ -232,10 +233,11 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 }
 
 func (h *HelmClient) releaseExists(name string) (bool, error) {
+	h.log.V(2).Info("releaseExists", "release", name)
 	_, err := h.actionConfig.Releases.Last(name)
 	if err != nil {
 		errStr := err.Error()
-		logf.Log.Info("helm: releaseExists check", "release", name, "err", errStr)
+		h.log.V(2).Info("releaseExists", "release", name, "err", errStr)
 		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "has no deployed releases") {
 			return false, nil
 		}
@@ -245,6 +247,7 @@ func (h *HelmClient) releaseExists(name string) (bool, error) {
 }
 
 func (h *HelmClient) install(spec *ChartSpec) error {
+	h.log.V(2).Info("install", "chartName", spec.ChartName, "namespace", spec.Namespace, "release", spec.ReleaseName, "version", spec.Version)
 	client := action.NewInstall(h.actionConfig)
 	client.ReleaseName = spec.ReleaseName
 	client.Namespace = spec.Namespace
@@ -279,6 +282,7 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 }
 
 func (h *HelmClient) upgrade(spec *ChartSpec) error {
+	h.log.V(2).Info("upgrade", "chartName", spec.ChartName, "namespace", spec.Namespace, "release", spec.ReleaseName, "version", spec.Version)
 	client := action.NewUpgrade(h.actionConfig)
 	client.Namespace = spec.Namespace
 	client.SkipCRDs = !spec.UpgradeCRDs

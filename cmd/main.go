@@ -19,7 +19,6 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	"log/slog"
 	"os"
 	"time"
 
@@ -45,6 +44,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/controller"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	// +kubebuilder:scaffold:imports
@@ -240,8 +240,8 @@ func main() {
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,
-		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
-			return utils.NewHelmClient(namespace, serviceAccountSecrets, h)
+		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace, serviceAccountSecrets, logger)
 		},
 		RequeueDelay: requeueDelay,
 		Scheme:       mgr.GetScheme(),

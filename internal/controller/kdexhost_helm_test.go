@@ -3,11 +3,11 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -28,7 +28,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error) {
 				return mockHelmClient, nil
 			}
 
@@ -48,7 +48,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		AfterEach(func() {
 			cleanupResources(testNamespace)
 			// Reset factory to avoid leaking mock to other tests
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error) {
 				return &MockHelmClient{}, nil
 			}
 			// Delete the namespace

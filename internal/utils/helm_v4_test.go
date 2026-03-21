@@ -2,11 +2,11 @@ package utils
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -15,7 +15,7 @@ import (
 )
 
 func TestHelmClient_Initialization(t *testing.T) {
-	client, err := NewHelmClient("default", nil, &slog.TextHandler{})
+	client, err := NewHelmClient("default", nil, logr.Logger{})
 	require.NoError(t, err)
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.actionConfig)
@@ -25,7 +25,7 @@ func TestHelmClient_Initialization(t *testing.T) {
 func TestHelmClient_OCIChartReachability(t *testing.T) {
 	// This test requires internet access and might be slow.
 	// We use a known public OCI chart for testing.
-	client, err := NewHelmClient("default", nil, &slog.TextHandler{})
+	client, err := NewHelmClient("default", nil, logr.Logger{})
 	require.NoError(t, err)
 
 	chartName := "oci://ghcr.io/kdex-tech/charts/host-manager"
@@ -81,7 +81,7 @@ func TestHelmClient_SecretWithPlainHTTP(t *testing.T) {
 				"repository": []byte(serverHostName + "/charts"),
 			},
 		},
-	}, &slog.TextHandler{})
+	}, logr.Logger{})
 	require.NoError(t, err)
 
 	chartName := "oci://" + serverHostName + "/charts/host-manager"

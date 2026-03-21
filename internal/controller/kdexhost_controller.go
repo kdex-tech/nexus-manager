@@ -19,7 +19,6 @@ package controller
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"strings"
@@ -64,7 +63,7 @@ type KDexHostReconciler struct {
 	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
-	HelmClientFactory func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error)
+	HelmClientFactory func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error)
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
@@ -235,7 +234,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 					c, err := r.HelmClientFactory(
 						host.Namespace,
 						host.Spec.ServiceAccountSecrets,
-						logr.ToSlogHandler(log.WithName("helm")),
+						log.WithName("helm"),
 					)
 					if err != nil {
 						return ctrl.Result{}, err

@@ -214,7 +214,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	c, err := r.HelmClientFactory(
 		host.Namespace,
 		serviceAccountSecrets,
-		logr.ToSlogHandler(log.WithName("helm")),
+		log.WithName("helm"),
 	)
 	if err != nil {
 		r.updateHelmStatus(ctx, namespace, name, generation, err, log)
@@ -241,11 +241,13 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 }
 
 func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, generation int64, err error, log logr.Logger) {
+	log.V(2).Info("updateHelmStatus", "generation", generation, "err", err)
+
 	defer r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, generation)
 
 	host := &kdexv1alpha1.KDexHost{}
 	if getErr := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, host); getErr != nil {
-		log.Error(getErr, "failed to get host", "namespace", namespace, "name", name)
+		log.Error(getErr, "failed to get host")
 		return
 	}
 
@@ -286,7 +288,7 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 		if !errors.IsNotFound(patchErr) && !errors.IsConflict(patchErr) {
 			log.Error(patchErr, "failed to patch status")
 		}
-		log.V(2).Info("updateHelmStatus", "namespace", namespace, "name", name, "patchErr", patchErr)
+		log.V(2).Info("updateHelmStatus", "patchErr", patchErr)
 	}
 }
 
