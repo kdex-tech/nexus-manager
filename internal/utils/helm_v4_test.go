@@ -15,13 +15,13 @@ import (
 )
 
 func TestHelmClient_Initialization(t *testing.T) {
-        namespace := "test-namespace"
-        client, err := NewHelmClient(namespace, nil, logr.Logger{})
-        require.NoError(t, err)
-        assert.NotNil(t, client)
-        assert.NotNil(t, client.actionConfig)
-        assert.NotNil(t, client.settings)
-        assert.Equal(t, namespace, client.settings.Namespace())
+	namespace := "test-namespace"
+	client, err := NewHelmClient(namespace, nil, logr.Logger{})
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+	assert.NotNil(t, client.actionConfig)
+	assert.NotNil(t, client.settings)
+	assert.Equal(t, namespace, client.settings.Namespace())
 }
 func TestHelmClient_OCIChartReachability(t *testing.T) {
 	// This test requires internet access and might be slow.
