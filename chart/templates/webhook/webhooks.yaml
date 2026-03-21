@@ -4,7 +4,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   annotations:
     {{- if .Values.certmanager.enable }}
-    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/serving-cert"
+    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/{{ include "kcnas-operator.fullname" . }}-serving"
     {{- end }}
   labels:
     {{- include "kcnas-operator.labels" . | nindent 4 }}
@@ -398,7 +398,7 @@ kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
     {{- if .Values.certmanager.enable }}
-    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/serving-cert"
+    cert-manager.io/inject-ca-from: "{{ $.Release.Namespace }}/{{ include "kcnas-operator.fullname" . }}-serving"
     {{- end }}
   labels:
     {{- include "kcnas-operator.labels" . | nindent 4 }}
