@@ -34,7 +34,7 @@ type ChartSpec struct {
 
 // HelmClientInterface defines the operations for Helm management.
 type HelmClientInterface interface {
-	AddRepository(name, url string) error
+	AddRepository(name, repo string) error
 	InstallOrUpgrade(spec *ChartSpec) error
 	Uninstall(releaseName string) error
 }
@@ -84,7 +84,7 @@ func NewHelmClient(
 }
 
 // AddRepository adds a Helm repository.
-func (h *HelmClient) AddRepository(name, url string) error {
+func (h *HelmClient) AddRepository(name, repo string) error {
 	// Helm v4 still uses repositories.yaml for non-OCI charts.
 	f, err := v1.LoadFile(h.settings.RepositoryConfig)
 	if err != nil {
@@ -102,7 +102,7 @@ func (h *HelmClient) AddRepository(name, url string) error {
 
 	c := v1.Entry{
 		Name: name,
-		URL:  url,
+		URL:  repo,
 	}
 
 	f.Add(&c)
@@ -120,7 +120,10 @@ func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
 	defer h.mu.Unlock()
 
 	// Bind the registry just in time
-	h.registryBind(spec)
+	err := h.registryBind(spec)
+	if err != nil {
+		return err
+	}
 
 	// Check if release exists
 	exists, err := h.releaseExists(spec.ReleaseName)
@@ -139,7 +142,10 @@ func (h *HelmClient) ShowChart(spec *ChartSpec) (string, error) {
 	defer h.mu.Unlock()
 
 	// Bind the registry just in time
-	h.registryBind(spec)
+	err := h.registryBind(spec)
+	if err != nil {
+		return "", err
+	}
 
 	client := action.NewShow(action.ShowChart, h.actionConfig)
 
