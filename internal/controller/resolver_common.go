@@ -17,6 +17,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func ResolveContents(
@@ -317,6 +318,30 @@ func ResolveSecret(
 	}
 
 	return &secret, false, ctrl.Result{}, nil
+}
+
+func ResolveServiceAccountSecrets(ctx context.Context, c client.Client, objectStatus *kdexv1alpha1.KDexObjectStatus, namespace string, saName string) ([]corev1.Secret, error) {
+	var sa corev1.ServiceAccount
+	if err := c.Get(ctx, types.NamespacedName{Name: saName, Namespace: namespace}, &sa); err != nil {
+		return nil, fmt.Errorf("failed to get service account %s/%s: %w", namespace, saName, err)
+	}
+
+	objectStatus.Attributes["serviceAccount.generation"] = fmt.Sprintf("%d", sa.GetGeneration())
+
+	secrets := []corev1.Secret{}
+	for _, secretRef := range sa.Secrets {
+		var secret corev1.Secret
+		// corev1.ObjectReference but in ServiceAccount context usually LocalObjectReference semantics but typed as ObjectReference
+		// Check the type: ServiceAccount.Secrets is []ObjectReference.
+		if err := c.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: namespace}, &secret); err != nil {
+			// log a warning and skip this secret
+			logf.FromContext(ctx).V(1).Info("failed to get secret", "namespace", namespace, "name", secretRef.Name, "error", err)
+			continue
+		}
+
+		secrets = append(secrets, secret)
+	}
+	return secrets, nil
 }
 
 func isReady(

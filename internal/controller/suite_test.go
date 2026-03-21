@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,7 +212,7 @@ var _ = BeforeSuite(func() {
 		Configuration: configuration,
 		RequeueDelay:  0,
 		Scheme:        k8sManager.GetScheme(),
-		HelmClientFactory: func(namespace string) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
 			return &MockHelmClient{}, nil
 		},
 	}

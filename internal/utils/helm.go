@@ -1,17 +1,23 @@
 package utils
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/repo/v1"
+	corev1 "k8s.io/api/core/v1"
+	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"oras.land/oras-go/v2/registry/remote/auth"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -28,9 +34,9 @@ type ChartSpec struct {
 
 // HelmClientInterface defines the operations for Helm management.
 type HelmClientInterface interface {
+	AddRepository(name, url string) error
 	InstallOrUpgrade(spec *ChartSpec) error
 	Uninstall(releaseName string) error
-	AddRepository(name, url string) error
 }
 
 // HelmClient is a wrapper around helm v4 SDK to simplify Helm operations.
@@ -38,17 +44,22 @@ type HelmClient struct {
 	settings     *cli.EnvSettings
 	actionConfig *action.Configuration
 	namespace    string
+	mu           sync.RWMutex
+	secrets      kdexv1alpha1.ServiceAccountSecrets
 }
 
 var _ HelmClientInterface = (*HelmClient)(nil)
 
 // NewHelmClient creates a new HelmClient for the given namespace.
-func NewHelmClient(namespace string) (*HelmClient, error) {
+func NewHelmClient(
+	namespace string,
+	secrets kdexv1alpha1.ServiceAccountSecrets,
+	h slog.Handler,
+) (*HelmClient, error) {
 	settings := cli.New()
 
 	actionConfig := action.NewConfiguration(
-		action.ConfigurationSetLogger(
-			logr.ToSlogHandler(logf.Log.WithName("helm"))))
+		action.ConfigurationSetLogger(h))
 
 	// Use secret driver by default
 	helmDriver := os.Getenv("HELM_DRIVER")
@@ -64,24 +75,53 @@ func NewHelmClient(namespace string) (*HelmClient, error) {
 		return nil, fmt.Errorf("failed to init action config: %w", err)
 	}
 
-	regClient, err := registry.NewClient(
-		registry.ClientOptDebug(settings.Debug),
-		registry.ClientOptEnableCache(true),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create registry client: %w", err)
-	}
-	actionConfig.RegistryClient = regClient
-
 	return &HelmClient{
-		settings:     settings,
 		actionConfig: actionConfig,
 		namespace:    namespace,
+		secrets:      secrets,
+		settings:     settings,
 	}, nil
+}
+
+// AddRepository adds a Helm repository.
+func (h *HelmClient) AddRepository(name, url string) error {
+	// Helm v4 still uses repositories.yaml for non-OCI charts.
+	f, err := v1.LoadFile(h.settings.RepositoryConfig)
+	if err != nil {
+		if os.IsNotExist(err) {
+			f = v1.NewFile()
+		} else {
+			return fmt.Errorf("failed to load repository file: %w", err)
+		}
+	}
+
+	if f.Has(name) {
+		// Already exists
+		return nil
+	}
+
+	c := v1.Entry{
+		Name: name,
+		URL:  url,
+	}
+
+	f.Add(&c)
+
+	if err := f.WriteFile(h.settings.RepositoryConfig, 0644); err != nil {
+		return fmt.Errorf("failed to write repository file: %w", err)
+	}
+
+	return nil
 }
 
 // InstallOrUpgrade installs or upgrades a Helm chart.
 func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Bind the registry just in time
+	h.registryBind(spec)
+
 	// Check if release exists
 	exists, err := h.releaseExists(spec.ReleaseName)
 	if err != nil {
@@ -92,6 +132,97 @@ func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
 		return h.install(spec)
 	}
 	return h.upgrade(spec)
+}
+
+func (h *HelmClient) ShowChart(spec *ChartSpec) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Bind the registry just in time
+	h.registryBind(spec)
+
+	client := action.NewShow(action.ShowChart, h.actionConfig)
+
+	if spec.Version != "" {
+		client.Version = spec.Version
+	}
+
+	// Locate the chart
+	cp, err := client.LocateChart(spec.ChartName, h.settings)
+	if err != nil {
+		return "", fmt.Errorf("failed to locate chart %s: %w", spec.ChartName, err)
+	}
+
+	return client.Run(cp)
+}
+
+// Uninstall uninstalls a Helm release.
+func (h *HelmClient) Uninstall(releaseName string) error {
+	client := action.NewUninstall(h.actionConfig)
+	_, err := client.Run(releaseName)
+	if err != nil {
+		return fmt.Errorf("failed to uninstall release %s: %w", releaseName, err)
+	}
+	return nil
+}
+
+func (h *HelmClient) registryBind(spec *ChartSpec) error {
+	options := []registry.ClientOption{
+		registry.ClientOptDebug(h.settings.Debug),
+		registry.ClientOptEnableCache(true),
+	}
+
+	reg := spec.ChartName
+	idx := strings.Index(reg, "//")
+
+	if idx > -1 {
+		reg = reg[idx:]
+	}
+
+	if !strings.HasPrefix(reg, "//") {
+		reg = "//" + reg
+	}
+	registryURL, err := url.Parse(reg)
+	if err != nil {
+		return err
+	}
+
+	if registryURL.Host == "" {
+		return fmt.Errorf("could not identify host from chartName: %s", spec.ChartName)
+	}
+
+	reg = fmt.Sprintf("%s%s", registryURL.Host, registryURL.Path)
+
+	match := h.secrets.Find(func(s corev1.Secret) bool {
+		return s.Annotations["kdex.dev/secret-type"] == "helm" && strings.HasPrefix(reg, string(s.Data["repository"]))
+	})
+
+	if match != nil {
+		if string(match.Data["plainHTTP"]) == "true" {
+			options = append(options, registry.ClientOptPlainHTTP())
+		}
+
+		if len(match.Data["username"]) > 0 && len(match.Data["password"]) > 0 {
+			options = append(options, registry.ClientOptAuthorizer(
+				auth.Client{
+					Credential: func(ctx context.Context, hostport string) (auth.Credential, error) {
+						return auth.Credential{
+							Password: string(match.Data["password"]),
+							Username: string(match.Data["username"]),
+						}, nil
+					},
+				},
+			))
+		}
+	}
+
+	regClient, err := registry.NewClient(options...)
+	if err != nil {
+		return fmt.Errorf("failed to create registry client: %w", err)
+	}
+	h.actionConfig.RegistryClient = regClient
+
+	return nil
 }
 
 func (h *HelmClient) releaseExists(name string) (bool, error) {
@@ -168,47 +299,6 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 	_, err = client.Run(spec.ReleaseName, chartRequested, spec.Values)
 	if err != nil {
 		return fmt.Errorf("failed to upgrade chart %s: %w", spec.ChartName, err)
-	}
-
-	return nil
-}
-
-// Uninstall uninstalls a Helm release.
-func (h *HelmClient) Uninstall(releaseName string) error {
-	client := action.NewUninstall(h.actionConfig)
-	_, err := client.Run(releaseName)
-	if err != nil {
-		return fmt.Errorf("failed to uninstall release %s: %w", releaseName, err)
-	}
-	return nil
-}
-
-// AddRepository adds a Helm repository.
-func (h *HelmClient) AddRepository(name, url string) error {
-	// Helm v4 still uses repositories.yaml for non-OCI charts.
-	f, err := v1.LoadFile(h.settings.RepositoryConfig)
-	if err != nil {
-		if os.IsNotExist(err) {
-			f = v1.NewFile()
-		} else {
-			return fmt.Errorf("failed to load repository file: %w", err)
-		}
-	}
-
-	if f.Has(name) {
-		// Already exists
-		return nil
-	}
-
-	c := v1.Entry{
-		Name: name,
-		URL:  url,
-	}
-
-	f.Add(&c)
-
-	if err := f.WriteFile(h.settings.RepositoryConfig, 0644); err != nil {
-		return fmt.Errorf("failed to write repository file: %w", err)
 	}
 
 	return nil

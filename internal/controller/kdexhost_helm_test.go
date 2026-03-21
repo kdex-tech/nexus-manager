@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -26,7 +28,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
 				return mockHelmClient, nil
 			}
 
@@ -46,7 +48,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		AfterEach(func() {
 			cleanupResources(testNamespace)
 			// Reset factory to avoid leaking mock to other tests
-			hostReconciler.HelmClientFactory = func(namespace string) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
 				return &MockHelmClient{}, nil
 			}
 			// Delete the namespace
@@ -76,6 +78,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
+
 			Eventually(func() bool {
 				return slices.Contains(mockHelmClient.InstalledCharts, resourceName)
 			}, "10s", "1s").Should(BeTrue(), "Expected helm chart to be installed")
@@ -100,6 +116,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			})
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
 
 			Eventually(func() bool {
 				foundHost := false
@@ -133,6 +163,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
+
 			Eventually(func() any {
 				v, ok := mockHelmClient.ChartValues[resourceName]
 				if !ok {
@@ -164,6 +208,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			})
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
 
 			// The reconciler should return quickly, and we should be able to see
 			// the resource in a "Progressing" state rather than waiting for 5 seconds.
@@ -202,6 +260,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
+
 			Eventually(func() string {
 				return mockHelmClient.ChartVersions[resource.Name]
 			}, "10s", "1s").Should(Equal("0.2.18"))
@@ -235,6 +307,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			})
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
 
 			Eventually(func() bool {
 				checkedHost := &kdexv1alpha1.KDexHost{}
@@ -272,6 +358,20 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			})
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resource.Name,
+					Namespace: testNamespace,
+				},
+			}
+			Eventually(func() error {
+				err := k8sClient.Create(ctx, serviceAccount)
+				if err != nil && !errors.IsAlreadyExists(err) {
+					return err
+				}
+				return nil
+			}, "5s").Should(Succeed())
 
 			Eventually(func() string {
 				return mockHelmClient.ChartVersions[resource.Name]

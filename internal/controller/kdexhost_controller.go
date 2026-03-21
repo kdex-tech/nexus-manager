@@ -19,12 +19,14 @@ package controller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
 	appsv1 "k8s.io/api/apps/v1"
@@ -62,7 +64,7 @@ type KDexHostReconciler struct {
 	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
-	HelmClientFactory func(namespace string) (utils.HelmClientInterface, error)
+	HelmClientFactory func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error)
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
@@ -147,6 +149,25 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.V(2).Info("status", "status", host.Status, "err", err, "res", res)
 	}()
 
+	serviceAccountName := host.Name
+	if host.Spec.ServiceAccountRef != nil && host.Spec.ServiceAccountRef.Name != "" {
+		serviceAccountName = host.Spec.ServiceAccountRef.Name
+	}
+	host.Spec.ServiceAccountSecrets, err = ResolveServiceAccountSecrets(ctx, r.Client, &host.Status, host.Namespace, serviceAccountName)
+	if err != nil {
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionTrue,
+				Progressing: metav1.ConditionFalse,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconcileSuccess,
+			err.Error(),
+		)
+		return ctrl.Result{}, err
+	}
+
 	if host.DeletionTimestamp.IsZero() {
 		if !controllerutil.ContainsFinalizer(&host, hostFinalizerName) {
 			controllerutil.AddFinalizer(&host, hostFinalizerName)
@@ -211,7 +232,11 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			if err == nil {
 				if deployment.DeletionTimestamp.IsZero() {
 					// Instead of deleting directly, we'll uninstall the Helm releases
-					c, err := r.HelmClientFactory(host.Namespace)
+					c, err := r.HelmClientFactory(
+						host.Namespace,
+						host.Spec.ServiceAccountSecrets,
+						logr.ToSlogHandler(log.WithName("helm")),
+					)
 					if err != nil {
 						return ctrl.Result{}, err
 					}
@@ -260,8 +285,6 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		kdexv1alpha1.ConditionReasonReconciling,
 		"Reconciling",
 	)
-
-	// Resolve direct requirements from host spec
 
 	announcementRef, errorRef, loginRef, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {

@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"log/slog"
 	"os"
 	"time"
 
@@ -239,8 +240,8 @@ func main() {
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,
-		HelmClientFactory: func(namespace string) (utils.HelmClientInterface, error) {
-			return utils.NewHelmClient(namespace)
+		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, h slog.Handler) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace, serviceAccountSecrets, h)
 		},
 		RequeueDelay: requeueDelay,
 		Scheme:       mgr.GetScheme(),

@@ -156,12 +156,18 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		return controllerutil.OperationResultNone, nil
 	}
 
-	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, host.Generation, log)
+	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, host.Generation, host.Spec.ServiceAccountSecrets, log)
 
 	return controllerutil.OperationResultUpdated, nil
 }
 
-func (r *KDexHostReconciler) runAsyncHelmReconcile(ctx context.Context, namespace, name string, generation int64, log logr.Logger) {
+func (r *KDexHostReconciler) runAsyncHelmReconcile(
+	ctx context.Context,
+	namespace, name string,
+	generation int64,
+	serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets,
+	log logr.Logger,
+) {
 	log.V(2).Info("runAsyncHelmReconcile#1", "namespace", namespace, "name", name)
 
 	// Fetch a fresh copy of the host
@@ -179,7 +185,11 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(ctx context.Context, namespac
 		return
 	}
 
-	c, err := r.HelmClientFactory(host.Namespace)
+	c, err := r.HelmClientFactory(
+		host.Namespace,
+		serviceAccountSecrets,
+		logr.ToSlogHandler(log.WithName("helm")),
+	)
 	if err != nil {
 		r.updateHelmStatus(ctx, namespace, name, generation, err, log)
 		return
