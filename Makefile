@@ -249,13 +249,9 @@ deploy-chart: copy-bundled-for-chart ## Deploy controller to the K8s cluster spe
 		--set "controllerManager.container.image.tag=latest" \
 		--set "controllerManager.container.imagePullPolicy=Always" \
 		--set "controllerManager.container.args[3]=--zap-log-level=info" \
-		--set "controllerManager.container.args[4]=--named-log-level=helm=3" \
-		--set "controllerManager.container.args[5]=--named-log-level=kdexhost=3" \
-		--set "controllerManager.container.args[6]=--named-log-level=kdexhost.translation=info" \
-		--set "controllerManager.container.args[7]=--named-log-level=kdexhost.utilitypage=info" \
-		--set "controllerManager.container.args[8]=--named-log-level=kdexhost.watch=info" \
-		--set "controllerManager.container.args[9]=--named-log-level=npm-registry=2"
-
+		--set "controllerManager.container.args[4]=--named-log-level=kdexhost=3" \
+		--set "controllerManager.container.args[5]=--named-log-level=kdexhost.translation=info" \
+		--set "controllerManager.container.args[6]=--named-log-level=kdexhost.watch=info"
 
 .PHONY: undeploy-chart
 undeploy-chart: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
