@@ -321,6 +321,10 @@ func ResolveSecret(
 }
 
 func ResolveServiceAccountSecrets(ctx context.Context, c client.Client, objectStatus *kdexv1alpha1.KDexObjectStatus, namespace string, saName string) ([]corev1.Secret, error) {
+	if saName == "" {
+		return []corev1.Secret{}, nil
+	}
+
 	var sa corev1.ServiceAccount
 	if err := c.Get(ctx, types.NamespacedName{Name: saName, Namespace: namespace}, &sa); err != nil {
 		return nil, fmt.Errorf("failed to get service account %s/%s: %w", namespace, saName, err)
