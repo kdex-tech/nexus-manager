@@ -148,7 +148,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.V(2).Info("status", "status", host.Status, "err", err, "res", res)
 	}()
 
-	serviceAccountName := host.Name
+	serviceAccountName := ""
 	if host.Spec.ServiceAccountRef != nil && host.Spec.ServiceAccountRef.Name != "" {
 		serviceAccountName = host.Spec.ServiceAccountRef.Name
 	}
