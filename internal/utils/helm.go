@@ -2,7 +2,9 @@ package utils
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -13,11 +15,16 @@ import (
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
+	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
 	v1 "helm.sh/helm/v4/pkg/repo/v1"
 	corev1 "k8s.io/api/core/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/auth"
+)
+
+const (
+	trueVal = "true"
 )
 
 // ChartSpec defines the parameters for a Helm chart installation or upgrade.
@@ -167,6 +174,10 @@ func (h *HelmClient) ShowChart(spec *ChartSpec) (string, error) {
 // Uninstall uninstalls a Helm release.
 func (h *HelmClient) Uninstall(releaseName string) error {
 	client := action.NewUninstall(h.actionConfig)
+	client.Timeout = 5 * time.Minute
+	client.DeletionPropagation = "foreground"
+	client.WaitStrategy = kube.StatusWatcherStrategy
+
 	_, err := client.Run(releaseName)
 	if err != nil {
 		return fmt.Errorf("failed to uninstall release %s: %w", releaseName, err)
@@ -202,12 +213,32 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 	reg = fmt.Sprintf("%s%s", registryURL.Host, registryURL.Path)
 
 	match := h.secrets.Find(func(s corev1.Secret) bool {
-		return s.Annotations["kdex.dev/secret-type"] == "helm" && strings.HasPrefix(reg, string(s.Data["repository"]))
+		if s.Annotations["kdex.dev/secret-type"] != "helm" {
+			return false
+		}
+
+		repo := string(s.Data["repository"])
+		// Strip any scheme from the secret repository for matching
+		if idx := strings.Index(repo, "//"); idx > -1 {
+			repo = repo[idx+2:]
+		}
+		return strings.HasPrefix(reg, repo)
 	})
 
 	if match != nil {
-		if string(match.Data["plainHTTP"]) == "true" {
+		if string(match.Data["plainHTTP"]) == trueVal {
 			options = append(options, registry.ClientOptPlainHTTP())
+		}
+
+		if string(match.Data["plainHTTP"]) == trueVal || string(match.Data["insecure"]) == trueVal {
+			httpClient := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{
+						InsecureSkipVerify: true,
+					},
+				},
+			}
+			options = append(options, registry.ClientOptHTTPClient(httpClient))
 		}
 
 		if len(match.Data["username"]) > 0 && len(match.Data["password"]) > 0 {
