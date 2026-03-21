@@ -57,6 +57,7 @@ func NewHelmClient(
 	logger logr.Logger,
 ) (*HelmClient, error) {
 	settings := cli.New()
+	settings.SetNamespace(namespace)
 
 	actionConfig := action.NewConfiguration(
 		action.ConfigurationSetLogger(logr.ToSlogHandler(logger)))
