@@ -4,7 +4,7 @@ kind: ClusterRole
 metadata:
   labels:
     {{- include "kcnas-operator.labels" . | nindent 4 }}
-  name: {{ include "kcnas-operator.fullname" . }}-host-controller
+  name: {{ include "kcnas-operator.fullname" . }}-host-manager
 rules:
 - apiGroups:
   - ""

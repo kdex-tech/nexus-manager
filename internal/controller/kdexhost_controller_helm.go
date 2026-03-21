@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/go-logr/logr"
@@ -328,10 +329,15 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 	vals["focalHost"] = host.Name
 	vals["fullnameOverride"] = host.Name
 
+	hostManagerClusterRole := os.Getenv("HOST_MANAGER_CLUSTER_ROLE")
+
 	roleRef := map[string]string{}
 	roleRef["apiGroup"] = "rbac.authorization.k8s.io"
 	roleRef["kind"] = "ClusterRole"
-	roleRef["name"] = host.Name + "-host-controller"
+
+	// If the result of roleRef.name is blank the host-manager chart creates it's own ClusterRole
+	roleRef["name"] = hostManagerClusterRole
+
 	vals["roleRef"] = roleRef
 
 	spec := &utils.ChartSpec{
