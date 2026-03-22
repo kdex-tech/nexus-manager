@@ -240,8 +240,8 @@ func main() {
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,
-		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error) {
-			return utils.NewHelmClient(namespace, serviceAccountSecrets, logger)
+		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace, secrets, logger)
 		},
 		RequeueDelay: requeueDelay,
 		Scheme:       mgr.GetScheme(),

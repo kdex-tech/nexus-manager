@@ -62,7 +62,7 @@ type KDexHostReconciler struct {
 	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
-	HelmClientFactory func(namespace string, serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets, logger logr.Logger) (utils.HelmClientInterface, error)
+	HelmClientFactory func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error)
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
@@ -147,11 +147,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.V(2).Info("status", "status", host.Status, "err", err, "res", res)
 	}()
 
-	serviceAccountName := ""
-	if host.Spec.ServiceAccountRef != nil && host.Spec.ServiceAccountRef.Name != "" {
-		serviceAccountName = host.Spec.ServiceAccountRef.Name
-	}
-	host.Spec.ServiceAccountSecrets, err = ResolveServiceAccountSecrets(ctx, r.Client, &host.Status, host.Namespace, serviceAccountName)
+	secrets, err := ResolveSecrets(ctx, r.Client, &host.Status, host.Namespace, host.Spec.Secrets)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -227,7 +223,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 			c, err := r.HelmClientFactory(
 				host.Namespace,
-				host.Spec.ServiceAccountSecrets,
+				secrets,
 				log.WithName("helm"),
 			)
 			if err != nil {
@@ -387,7 +383,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}
 
 	log.Info("calling reconcileHelmReleases", "host", host.Name)
-	helmOp, err := r.reconcileHelmReleases(ctx, &host, log)
+	helmOp, err := r.reconcileHelmReleases(ctx, &host, secrets, log)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,

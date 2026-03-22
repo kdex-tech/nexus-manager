@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"kdex.dev/crds/api/v1alpha1"
+	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 )
 
 func TestHelmClient_Initialization(t *testing.T) {
@@ -68,7 +68,7 @@ func TestHelmClient_SecretWithPlainHTTP(t *testing.T) {
 
 	serverHostName := server.URL[7:]
 
-	client, err := NewHelmClient("default", v1alpha1.ServiceAccountSecrets{
+	client, err := NewHelmClient("default", kdexv1alpha1.Secrets{
 		corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "foo",

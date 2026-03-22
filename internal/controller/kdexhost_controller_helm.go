@@ -97,7 +97,7 @@ func (r *KDexHostReconciler) isHelmOperationActive(key types.NamespacedName, gen
 	return active && op.generation == generation
 }
 
-func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, log logr.Logger) (controllerutil.OperationResult, error) {
+func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) (controllerutil.OperationResult, error) {
 	log.V(2).Info("reconcileHelmReleases#1", "host", host.Name, "namespace", host.Namespace)
 
 	// Fetch a fresh copy of the host to ensure we have the latest status and generation
@@ -183,7 +183,7 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		return controllerutil.OperationResultNone, nil
 	}
 
-	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, host.Generation, host.Spec.ServiceAccountSecrets, log)
+	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, host.Generation, secrets, log)
 
 	return controllerutil.OperationResultUpdated, nil
 }
@@ -192,7 +192,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	ctx context.Context,
 	namespace, name string,
 	generation int64,
-	serviceAccountSecrets kdexv1alpha1.ServiceAccountSecrets,
+	secrets kdexv1alpha1.Secrets,
 	log logr.Logger,
 ) {
 	log.V(2).Info("runAsyncHelmReconcile#1", "namespace", namespace, "name", name)
@@ -214,7 +214,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 
 	c, err := r.HelmClientFactory(
 		host.Namespace,
-		serviceAccountSecrets,
+		secrets,
 		log.WithName("helm"),
 	)
 	if err != nil {

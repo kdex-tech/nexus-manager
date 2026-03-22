@@ -52,7 +52,7 @@ type HelmClient struct {
 	log          logr.Logger
 	namespace    string
 	mu           sync.RWMutex
-	secrets      kdexv1alpha1.ServiceAccountSecrets
+	secrets      kdexv1alpha1.Secrets
 }
 
 var _ HelmClientInterface = (*HelmClient)(nil)
@@ -60,7 +60,7 @@ var _ HelmClientInterface = (*HelmClient)(nil)
 // NewHelmClient creates a new HelmClient for the given namespace.
 func NewHelmClient(
 	namespace string,
-	secrets kdexv1alpha1.ServiceAccountSecrets,
+	secrets kdexv1alpha1.Secrets,
 	logger logr.Logger,
 ) (*HelmClient, error) {
 	settings := cli.New()
