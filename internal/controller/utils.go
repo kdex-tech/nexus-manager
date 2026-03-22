@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -111,6 +112,24 @@ func MakeHandlerByReferencePath(
 						log.V(2).Info("struct", "interface", theReferenceStruct, "object", item.GetName(), "node", idx)
 
 						switch v := theReferenceStruct.(type) {
+						case string:
+							if v == o.GetName() {
+								requests = append(requests, reconcile.Request{
+									NamespacedName: types.NamespacedName{
+										Name:      item.GetName(),
+										Namespace: item.GetNamespace(),
+									},
+								})
+							}
+						case []string:
+							if slices.Contains(v, o.GetName()) {
+								requests = append(requests, reconcile.Request{
+									NamespacedName: types.NamespacedName{
+										Name:      item.GetName(),
+										Namespace: item.GetNamespace(),
+									},
+								})
+							}
 						case corev1.LocalObjectReference:
 							if v.Name == o.GetName() {
 								requests = append(requests, reconcile.Request{
