@@ -246,6 +246,11 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				}
 			}
 
+			err = r.deleteHelmClient(host.Name, host.Namespace)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+
 			controllerutil.RemoveFinalizer(&host, hostFinalizerName)
 			if err := r.Update(ctx, &host); err != nil {
 				return ctrl.Result{}, err
@@ -691,8 +696,8 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	helmClient, ok := r.helmClients[name+"-"+namespace]
 
 	if !ok {
-		helmClient, err := r.HelmClientFactory(namespace, secrets, logger)
-		if err != nil {
+		var err error
+		if helmClient, err = r.HelmClientFactory(namespace, secrets, logger); err != nil {
 			return nil, err
 		}
 
