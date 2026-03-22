@@ -5,8 +5,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -41,20 +39,6 @@ var _ = Describe("KDexHost Conflict Reproduction", func() {
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-
-			serviceAccount := &corev1.ServiceAccount{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resource.Name,
-					Namespace: namespace,
-				},
-			}
-			Eventually(func() error {
-				err := k8sClient.Create(ctx, serviceAccount)
-				if err != nil && !errors.IsAlreadyExists(err) {
-					return err
-				}
-				return nil
-			}, "5s").Should(Succeed())
 
 			// We wait for the resource to be processed.
 			// If there's a conflict error in the reconciler, it usually shows up in the logs

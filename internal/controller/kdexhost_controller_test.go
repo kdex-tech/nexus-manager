@@ -35,20 +35,6 @@ import (
 )
 
 func readyResources(ctx context.Context, name, namespace string) {
-	serviceAccount := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-	}
-	Eventually(func() error {
-		err := k8sClient.Create(ctx, serviceAccount)
-		if err != nil && !errors.IsAlreadyExists(err) {
-			return err
-		}
-		return nil
-	}, "5s").Should(Succeed())
-
 	// 1. Create and ready the deployment
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
