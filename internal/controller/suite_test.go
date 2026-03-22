@@ -357,7 +357,7 @@ var _ = BeforeSuite(func() {
 						},
 					},
 				},
-				PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+				PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 					Kind: "KDexClusterPageArchetype",
 					Name: "kdex-default-page-archetype",
 				},

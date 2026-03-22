@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -265,6 +266,40 @@ func ResolveKDexObjectReference(
 	}
 
 	return obj.(client.Object), false, ctrl.Result{}, nil
+}
+
+func ResolveOrDefaultPageArchetype(ctx context.Context, c client.Client, referrer client.Object, referrerConditions *[]metav1.Condition, pageArchetypeRef *kdexv1alpha1.KDexObjectReference, requeueDelay time.Duration) (client.Object, bool, ctrl.Result, error) {
+	pageArchetypeObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, c, referrer, referrerConditions, pageArchetypeRef, requeueDelay)
+	if shouldReturn {
+		return nil, shouldReturn, r1, err
+	}
+
+	if pageArchetypeObj == nil {
+		var clusterPageArchetypeList kdexv1alpha1.KDexClusterPageArchetypeList
+		if err = c.List(ctx, &clusterPageArchetypeList, client.MatchingLabels{"kdex.dev/default": "true"}); err != nil {
+			kdexv1alpha1.SetConditions(
+				referrerConditions,
+				kdexv1alpha1.ConditionStatuses{
+					Degraded:    metav1.ConditionTrue,
+					Progressing: metav1.ConditionFalse,
+					Ready:       metav1.ConditionFalse,
+				},
+				kdexv1alpha1.ConditionReasonReconcileSuccess,
+				err.Error(),
+			)
+			return nil, true, ctrl.Result{}, err
+		}
+
+		if len(clusterPageArchetypeList.Items) != 0 {
+			slices.SortFunc(clusterPageArchetypeList.Items, func(a, b kdexv1alpha1.KDexClusterPageArchetype) int {
+				return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
+			})
+
+			pageArchetypeObj = &clusterPageArchetypeList.Items[0]
+		}
+	}
+
+	return pageArchetypeObj, false, ctrl.Result{}, nil
 }
 
 func ResolveSecret(

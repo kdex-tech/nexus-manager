@@ -2,6 +2,8 @@ apiVersion: kdex.dev/v1alpha1
 kind: KDexClusterPageArchetype
 metadata:
   name: kdex-default-page-archetype-standard
+  labels:
+    kdex.dev/default: "true"
 spec:
   content: |
     <!DOCTYPE html>

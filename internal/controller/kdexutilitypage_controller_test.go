@@ -137,30 +137,6 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 			Expect(err.Error()).To(ContainSubstring(`exactly one of the fields in [appRef rawHTML] must be set`))
 		})
 
-		It("should not validate with no page archetype", func() {
-			utilityPage := &kdexv1alpha1.KDexUtilityPage{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      KDexUtilityPageName,
-					Namespace: namespace,
-				},
-				Spec: kdexv1alpha1.KDexUtilityPageSpec{
-					ContentEntries: []kdexv1alpha1.ContentEntry{
-						{
-							Slot: "main",
-							ContentEntryStatic: kdexv1alpha1.ContentEntryStatic{
-								RawHTML: "",
-							},
-						},
-					},
-					Type: "Announcement",
-				},
-			}
-
-			err := k8sClient.Create(ctx, utilityPage)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`pageArchetypeRef.name must not be empty`))
-		})
-
 		It("should not validate with empty content entry", func() {
 			utilityPage := &kdexv1alpha1.KDexUtilityPage{
 				ObjectMeta: metav1.ObjectMeta{
@@ -176,7 +152,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 							},
 						},
 					},
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-utility-archetype",
 					},
 					Type: "Announcement",
@@ -203,7 +179,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 							},
 						},
 					},
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Kind: "KDexPageArchetype",
 						Name: "test-utility-archetype",
 					},
@@ -243,7 +219,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 				},
 				Spec: kdexv1alpha1.KDexUtilityPageSpec{
 					Type: kdexv1alpha1.AnnouncementUtilityPageType,
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Kind: "KDexPageArchetype",
 						Name: archetype.Name,
 					},

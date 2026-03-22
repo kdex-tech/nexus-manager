@@ -104,7 +104,7 @@ func (r *KDexUtilityPageReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		"Reconciling",
 	)
 
-	archetypeObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, o, &status.Conditions, &spec.PageArchetypeRef, r.RequeueDelay)
+	archetypeObj, shouldReturn, r1, err := ResolveOrDefaultPageArchetype(ctx, r.Client, o, &status.Conditions, spec.PageArchetypeRef, r.RequeueDelay)
 	if shouldReturn {
 		return r1, err
 	}

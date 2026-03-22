@@ -46,7 +46,7 @@ func (a *KDexPageDefaulter[T]) Default(ctx context.Context, obj T) error {
 		}
 	}
 
-	if spec.PageArchetypeRef.Kind == "" {
+	if spec.PageArchetypeRef != nil && spec.PageArchetypeRef.Kind == "" {
 		spec.PageArchetypeRef.Kind = "KDexPageArchetype"
 	}
 

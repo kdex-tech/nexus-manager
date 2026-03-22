@@ -65,7 +65,7 @@ func (a *KDexUtilityPageDefaulter[T]) Default(ctx context.Context, obj T) error 
 		}
 	}
 
-	if spec.PageArchetypeRef.Kind == "" {
+	if spec.PageArchetypeRef != nil && spec.PageArchetypeRef.Kind == "" {
 		if clustered {
 			spec.PageArchetypeRef.Kind = KDexClusterPageArchetype
 		} else {

@@ -181,7 +181,7 @@ var _ = Describe("KDexPage Controller", func() {
 						Name: "test-host",
 					},
 					Label: "test-label",
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-page-archetype",
 					},
 					Paths: kdexv1alpha1.Paths{
@@ -222,36 +222,6 @@ var _ = Describe("KDexPage Controller", func() {
 			Expect(err.Error()).To(ContainSubstring(`hostRef.name must not be empty`))
 		})
 
-		It("must not validate if pageArchetypeRef.name is missing name", func() {
-			resource := &kdexv1alpha1.KDexPage{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespace,
-				},
-				Spec: kdexv1alpha1.KDexPageSpec{
-					ContentEntries: []kdexv1alpha1.ContentEntry{
-						{
-							Slot: "main",
-							ContentEntryStatic: kdexv1alpha1.ContentEntryStatic{
-								RawHTML: "<invalid html",
-							},
-						},
-					},
-					HostRef: corev1.LocalObjectReference{
-						Name: "test-host",
-					},
-					Label: "test",
-					Paths: kdexv1alpha1.Paths{
-						BasePath: "/",
-					},
-				},
-			}
-
-			err := k8sClient.Create(ctx, resource)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`pageArchetypeRef.name must not be empty`))
-		})
-
 		It("must not validate if contentEntries has invalid rawHTML", func() {
 			resource := &kdexv1alpha1.KDexPage{
 				ObjectMeta: metav1.ObjectMeta{
@@ -271,7 +241,7 @@ var _ = Describe("KDexPage Controller", func() {
 						Name: "test-host",
 					},
 					Label: "test",
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-page-archetype",
 					},
 					Paths: kdexv1alpha1.Paths{
@@ -304,7 +274,7 @@ var _ = Describe("KDexPage Controller", func() {
 						Name: "test-host",
 					},
 					Label: "test",
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-page-archetype",
 					},
 					Paths: kdexv1alpha1.Paths{
@@ -338,7 +308,7 @@ var _ = Describe("KDexPage Controller", func() {
 						Name: "test-host",
 					},
 					Label: "test",
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-page-archetype",
 					},
 					Paths: kdexv1alpha1.Paths{
@@ -374,7 +344,7 @@ var _ = Describe("KDexPage Controller", func() {
 						Name: "test-host",
 					},
 					Label: "test",
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Name: "test-page-archetype",
 					},
 					Paths: kdexv1alpha1.Paths{

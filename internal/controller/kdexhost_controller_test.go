@@ -522,7 +522,7 @@ var _ = Describe("KDexHost Controller", func() {
 							},
 						},
 					},
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Kind: "KDexPageArchetype",
 						Name: archetypeName,
 					},
@@ -704,7 +704,7 @@ var _ = Describe("KDexHost Controller", func() {
 							},
 						},
 					},
-					PageArchetypeRef: kdexv1alpha1.KDexObjectReference{
+					PageArchetypeRef: &kdexv1alpha1.KDexObjectReference{
 						Kind: "KDexClusterPageArchetype",
 						Name: pageArchetype.Name,
 					},
