@@ -212,7 +212,8 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		return
 	}
 
-	c, err := r.HelmClientFactory(
+	c, err := r.getOrCreateHelmClient(
+		host.Name,
 		host.Namespace,
 		secrets,
 		log.WithName("helm"),

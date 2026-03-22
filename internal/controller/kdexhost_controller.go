@@ -68,6 +68,7 @@ type KDexHostReconciler struct {
 
 	activeHelmOperations map[types.NamespacedName]helmOperation
 	mu                   sync.RWMutex
+	helmClients          map[string]utils.HelmClientInterface
 }
 
 // nolint:gocyclo
@@ -221,7 +222,8 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
 
-			c, err := r.HelmClientFactory(
+			c, err := r.getOrCreateHelmClient(
+				host.Name,
 				host.Namespace,
 				secrets,
 				log.WithName("helm"),
@@ -663,4 +665,39 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	}
 
 	return op, internalHost, nil
+}
+
+func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.helmClients == nil {
+		r.helmClients = map[string]utils.HelmClientInterface{}
+	}
+
+	delete(r.helmClients, name+"-"+namespace)
+
+	return nil
+}
+
+func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.helmClients == nil {
+		r.helmClients = map[string]utils.HelmClientInterface{}
+	}
+
+	helmClient, ok := r.helmClients[name+"-"+namespace]
+
+	if !ok {
+		helmClient, err := r.HelmClientFactory(namespace, secrets, logger)
+		if err != nil {
+			return nil, err
+		}
+
+		r.helmClients[name+"-"+namespace] = helmClient
+	}
+
+	return helmClient, nil
 }
