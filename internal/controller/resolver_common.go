@@ -360,12 +360,14 @@ func ResolveSecrets(ctx context.Context, c client.Client, objectStatus *kdexv1al
 		return kdexv1alpha1.Secrets{}, nil
 	}
 
+	log := logf.FromContext(ctx)
+
 	secrets := kdexv1alpha1.Secrets{}
 	for _, secretName := range secretNames {
 		var secret corev1.Secret
 		if err := c.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, &secret); err != nil {
 			// log a warning and skip this secret
-			logf.FromContext(ctx).V(1).Info("failed to get secret", "namespace", namespace, "name", secretName, "error", err)
+			log.V(1).Info("failed to get secret", "error", err)
 			continue
 		}
 
