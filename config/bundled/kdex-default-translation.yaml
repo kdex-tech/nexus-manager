@@ -18,7 +18,7 @@ spec:
       login.signin: Sign In
       login.signin.with: Sign In with %s
       login.title: Login to %s
-      login.username: Username
+      login.username: Username or Email
   - lang: de
     keysAndValues:
       all-rights-reserved: Alle Rechte vorbehalten.
@@ -33,7 +33,7 @@ spec:
       login.signin: Anmelden
       login.signin.with: Anmelden mit %s
       login.title: Login bei %s
-      login.username: Benutzername
+      login.username: Benutzername oder E-Mail
   - lang: es
     keysAndValues:
       all-rights-reserved: Todos los derechos reservados.
@@ -48,7 +48,7 @@ spec:
       login.signin: Iniciar sesión
       login.signin.with: Iniciar sesión con %s
       login.title: Iniciar sesión en %s
-      login.username: Nombre de usuario
+      login.username: Nombre de usuario o correo electrónico
   - lang: fr
     keysAndValues:
       all-rights-reserved: Tous droits réservés.
@@ -63,7 +63,7 @@ spec:
       login.signin: Se connecter
       login.signin.with: Se connecter avec %s
       login.title: Connexion à %s
-      login.username: Nom d'utilisateur
+      login.username: Nom d'utilisateur ou e-mail
   - lang: it
     keysAndValues:
       all-rights-reserved: Tutti i diritti riservati.
@@ -78,7 +78,7 @@ spec:
       login.signin: Accedi
       login.signin.with: Accedi con %s
       login.title: Accedi a %s
-      login.username: Nome utente
+      login.username: Nome utente o e-mail
   - lang: pt
     keysAndValues:
       all-rights-reserved: Todos os direitos reservados.
@@ -93,7 +93,7 @@ spec:
       login.signin: Entrar
       login.signin.with: Entrar com %s
       login.title: Entrar em %s
-      login.username: Nome de usuário
+      login.username: Nome de usuário ou e-mail
   - lang: ru
     keysAndValues:
       all-rights-reserved: Все права защищены.
@@ -108,7 +108,7 @@ spec:
       login.signin: Войти
       login.signin.with: Войти через %s
       login.title: Вход в %s
-      login.username: Имя пользователя
+      login.username: Имя пользователя или e-mail
   - lang: zh
     keysAndValues:
       all-rights-reserved: 版权所有
@@ -123,4 +123,4 @@ spec:
       login.signin: 登录
       login.signin.with: 使用 %s 登录
       login.title: 登录到 %s
-      login.username: 用户名
+      login.username: 用户名或电子邮箱
