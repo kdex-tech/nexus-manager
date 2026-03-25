@@ -19,6 +19,21 @@ spec:
       login.signin.with: Sign In with %s
       login.title: Login to %s
       login.username: Username or Email
+  - lang: en-CA
+    keysAndValues:
+      all-rights-reserved: All Rights Reserved.
+      announcement.message: This host is ready to serve requests, but no pages have been deployed yet. Please deploy pages to start serving content.
+      announcement.organization: "Organization: %s"
+      announcement.title: Welcome to %s
+      error.label: "The following error occurred while processing your request:"
+      error.title: An error occurred on %s
+      login.logout: Logout
+      login.or: or
+      login.password: Password
+      login.signin: Sign In
+      login.signin.with: Sign In with %s
+      login.title: Login to %s
+      login.username: Username or Email
   - lang: de
     keysAndValues:
       all-rights-reserved: Alle Rechte vorbehalten.
@@ -53,6 +68,21 @@ spec:
     keysAndValues:
       all-rights-reserved: Tous droits réservés.
       announcement.message: Ce serveur est prêt à traiter les requêtes, mais aucune page n'a encore été déployée. Veuillez déployer des pages pour commencer à servir du contenu.
+      announcement.organization: "Organisation : %s"
+      announcement.title: Bienvenue sur %s
+      error.label: "Une erreur est survenue lors du traitement de votre demande:"
+      error.title: Erreur sur %s
+      login.logout: Déconnexion
+      login.or: ou
+      login.password: Mot de passe
+      login.signin: Se connecter
+      login.signin.with: Se connecter avec %s
+      login.title: Connexion à %s
+      login.username: Nom d'utilisateur ou e-mail
+  - lang: fr-CA
+    keysAndValues:
+      all-rights-reserved: Tous droits réservés.
+      announcement.message: Ce serveur est prêt à traiter les requêtes, mas aucune page n'a encore été déployée. Veuillez déployer des pages pour commencer à servir du contenu.
       announcement.organization: "Organisation : %s"
       announcement.title: Bienvenue sur %s
       error.label: "Une erreur est survenue lors du traitement de votre demande:"

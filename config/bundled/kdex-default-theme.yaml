@@ -246,6 +246,8 @@ spec:
 
       /* Flags logic remains same */
       .flag-en:before { content: "🇺🇸"; }
+      .flag-en-ca:before, .flag-en-CA:before { content: "🇨🇦"; }
+      .flag-fr-ca:before, .flag-fr-CA:before { content: "🇨🇦"; }
       .flag-de:before { content: "🇩🇪"; }
       .flag-es:before { content: "🇪🇸"; }
       .flag-fr:before { content: "🇫🇷"; }
@@ -255,6 +257,8 @@ spec:
       .flag-zh:before { content: "🇨🇳"; }
 
       .current-flag-en:before { content: "🇺🇸"; margin-right: 0.5rem; }
+      .current-flag-en-ca:before, .current-flag-en-CA:before { content: "🇨🇦"; margin-right: 0.5rem; }
+      .current-flag-fr-ca:before, .current-flag-fr-CA:before { content: "🇨🇦"; margin-right: 0.5rem; }
       .current-flag-de:before { content: "🇩🇪"; margin-right: 0.5rem; }
       .current-flag-es:before { content: "🇪🇸"; margin-right: 0.5rem; }
       .current-flag-fr:before { content: "🇫🇷"; margin-right: 0.5rem; }
