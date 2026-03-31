@@ -3,6 +3,8 @@ package controller
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -25,6 +27,7 @@ import (
 const (
 	AttributeHelmReleaseStatus     = "helm.release.status"
 	AttributeHelmReleaseGeneration = "helm.release.generation"
+	AttributeHelmReleaseHash       = "helm.release.hash"
 	AttributeHelmReleaseError      = "helm.release.error"
 	AttributeHelmReleaseOwner      = "helm.release.owner"
 
@@ -54,13 +57,38 @@ func (r *KDexHostReconciler) getConfiguration() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName, cancel context.CancelFunc, generation int64) bool {
+func (r *KDexHostReconciler) computeHelmReleaseHash(host *kdexv1alpha1.KDexHost) (string, error) {
+	configBytes, err := r.getConfiguration()
+	if err != nil {
+		return "", err
+	}
+
+	inputs := struct {
+		HostSpec    kdexv1alpha1.KDexHostSpec `json:"hostSpec"`
+		Config      string                    `json:"config"`
+		ClusterRole string                    `json:"clusterRole"`
+	}{
+		HostSpec:    host.Spec,
+		Config:      string(configBytes),
+		ClusterRole: os.Getenv("HOST_MANAGER_CLUSTER_ROLE"),
+	}
+
+	b, err := json.Marshal(inputs)
+	if err != nil {
+		return "", err
+	}
+
+	hash := sha256.Sum256(b)
+	return fmt.Sprintf("%x", hash), nil
+}
+
+func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName, cancel context.CancelFunc, hash string) bool {
 	r.mu.Lock()
 	if r.activeHelmOperations == nil {
 		r.activeHelmOperations = make(map[types.NamespacedName]helmOperation)
 	}
 	if old, active := r.activeHelmOperations[key]; active {
-		if old.generation == generation {
+		if old.hash == hash {
 			r.mu.Unlock()
 			return false
 		}
@@ -72,29 +100,29 @@ func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName,
 
 		r.mu.Lock()
 	}
-	r.activeHelmOperations[key] = helmOperation{cancel, generation}
+	r.activeHelmOperations[key] = helmOperation{cancel, hash}
 	r.mu.Unlock()
 	return true
 }
 
-func (r *KDexHostReconciler) clearHelmOperationActive(key types.NamespacedName, generation int64) {
+func (r *KDexHostReconciler) clearHelmOperationActive(key types.NamespacedName, hash string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.activeHelmOperations != nil {
-		if op, exists := r.activeHelmOperations[key]; exists && op.generation == generation {
+		if op, exists := r.activeHelmOperations[key]; exists && op.hash == hash {
 			delete(r.activeHelmOperations, key)
 		}
 	}
 }
 
-func (r *KDexHostReconciler) isHelmOperationActive(key types.NamespacedName, generation int64) bool {
+func (r *KDexHostReconciler) isHelmOperationActive(key types.NamespacedName, hash string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.activeHelmOperations == nil {
 		return false
 	}
 	op, active := r.activeHelmOperations[key]
-	return active && op.generation == generation
+	return active && op.hash == hash
 }
 
 func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) (controllerutil.OperationResult, error) {
@@ -113,15 +141,19 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	host.Generation = latestHost.Generation
 	host.ResourceVersion = latestHost.ResourceVersion
 
+	currentHash, err := r.computeHelmReleaseHash(host)
+	if err != nil {
+		return controllerutil.OperationResultNone, fmt.Errorf("failed to compute helm release hash: %w", err)
+	}
+
 	// Check if a Helm operation is already in progress using the latest status from the server
 	status := latestHost.Status.Attributes[AttributeHelmReleaseStatus]
-	genStr := latestHost.Status.Attributes[AttributeHelmReleaseGeneration]
-	gen, _ := strconv.ParseInt(genStr, 10, 64)
+	recordedHash := latestHost.Status.Attributes[AttributeHelmReleaseHash]
 
 	key := client.ObjectKeyFromObject(host)
 	if status == HelmStatusInProgress {
 		// If it's marked in progress in status, check if we actually have a goroutine running for it
-		if r.isHelmOperationActive(key, host.Generation) {
+		if r.isHelmOperationActive(key, currentHash) {
 			// Still working, requeue
 			log.V(2).Info("reconcileHelmReleases#2", "host", host.Name, "namespace", host.Namespace)
 			return controllerutil.OperationResultNone, nil
@@ -138,9 +170,9 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		}
 	}
 
-	if (status == HelmStatusCompleted || status == HelmStatusFailed) && gen == host.Generation {
-		// Already attempted for this generation
-		log.Info("reconcileHelmReleases#3", "host", host.Name, "namespace", host.Namespace)
+	if (status == HelmStatusCompleted || status == HelmStatusFailed) && recordedHash == currentHash {
+		// Already attempted for this configuration
+		log.Info("reconcileHelmReleases#3", "host", host.Name, "namespace", host.Namespace, "msg", "hash matches, skipping")
 		return controllerutil.OperationResultNone, nil
 	}
 
@@ -150,6 +182,7 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		host.Status.Attributes = make(map[string]string)
 	}
 	host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusInProgress
+	host.Status.Attributes[AttributeHelmReleaseHash] = currentHash
 	host.Status.Attributes[AttributeHelmReleaseGeneration] = strconv.FormatInt(host.Generation, 10)
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
 	delete(host.Status.Attributes, AttributeHelmReleaseError)
@@ -177,13 +210,13 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 
 	// Start the goroutine with a tracked context
 	asyncCtx, cancel := context.WithCancel(r.Ctx)
-	if !r.trySetHelmOperationActive(key, cancel, host.Generation) {
+	if !r.trySetHelmOperationActive(key, cancel, currentHash) {
 		cancel()
 		log.V(2).Info("reconcileHelmReleases#5", "host", host.Name, "namespace", host.Namespace, "msg", "already active")
 		return controllerutil.OperationResultNone, nil
 	}
 
-	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, host.Generation, secrets, log)
+	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, currentHash, secrets, log)
 
 	return controllerutil.OperationResultUpdated, nil
 }
@@ -191,7 +224,7 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	ctx context.Context,
 	namespace, name string,
-	generation int64,
+	hash string,
 	secrets kdexv1alpha1.Secrets,
 	log logr.Logger,
 ) {
@@ -201,14 +234,14 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	host := &kdexv1alpha1.KDexHost{}
 	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, host); err != nil {
 		log.Error(err, "failed to get host", "namespace", namespace, "name", name)
-		r.clearHelmOperationActive(client.ObjectKey{Namespace: namespace, Name: name}, generation)
+		r.clearHelmOperationActive(client.ObjectKey{Namespace: namespace, Name: name}, hash)
 		return // Host might have been deleted
 	}
 
 	if r.HelmClientFactory == nil {
 		err := fmt.Errorf("HelmClientFactory is nil")
 		log.Error(err, "controller misconfigured")
-		r.updateHelmStatus(ctx, namespace, name, generation, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
 		return
 	}
 
@@ -219,13 +252,13 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		log.WithName("helm"),
 	)
 	if err != nil {
-		r.updateHelmStatus(ctx, namespace, name, generation, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
 		return
 	}
 
 	// 1. Reconcile kdex-host-manager chart
 	if err := r.reconcileHostManagerChart(c, host); err != nil {
-		r.updateHelmStatus(ctx, namespace, name, generation, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
 		return
 	}
 
@@ -233,19 +266,19 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	if host.Spec.Helm != nil {
 		for _, companion := range host.Spec.Helm.CompanionCharts {
 			if err := r.reconcileCompanionChart(c, host, companion); err != nil {
-				r.updateHelmStatus(ctx, namespace, name, generation, err, log)
+				r.updateHelmStatus(ctx, namespace, name, hash, err, log)
 				return
 			}
 		}
 	}
 
-	r.updateHelmStatus(ctx, namespace, name, generation, nil, log)
+	r.updateHelmStatus(ctx, namespace, name, hash, nil, log)
 }
 
-func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, generation int64, err error, log logr.Logger) {
-	log.V(2).Info("updateHelmStatus", "generation", generation, "err", err)
+func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, hash string, err error, log logr.Logger) {
+	log.V(2).Info("updateHelmStatus", "hash", hash, "err", err)
 
-	defer r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, generation)
+	defer r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
 
 	host := &kdexv1alpha1.KDexHost{}
 	if getErr := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, host); getErr != nil {
@@ -283,7 +316,7 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 			"Helm installation completed",
 		)
 	}
-	host.Status.Attributes[AttributeHelmReleaseGeneration] = strconv.FormatInt(generation, 10)
+	host.Status.Attributes[AttributeHelmReleaseHash] = hash
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
 
 	if patchErr := r.Status().Patch(ctx, host, patch); patchErr != nil {

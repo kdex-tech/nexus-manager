@@ -52,8 +52,8 @@ const (
 )
 
 type helmOperation struct {
-	cancel     context.CancelFunc
-	generation int64
+	cancel context.CancelFunc
+	hash   string
 }
 
 // KDexHostReconciler reconciles a KDexHost object
