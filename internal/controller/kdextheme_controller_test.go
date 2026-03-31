@@ -194,7 +194,7 @@ var _ = Describe("KDexTheme Controller", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 		})
 
-		It("should validate with image and relative assets that are prefixed by default ingressPath", func() {
+		It("should validate with staticImage and relative assets that are prefixed by default ingressPath", func() {
 			resource := &kdexv1alpha1.KDexTheme{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      resourceName,
@@ -211,6 +211,30 @@ var _ = Describe("KDexTheme Controller", func() {
 					},
 					Backend: kdexv1alpha1.Backend{
 						StaticImage: "foo/bar",
+					},
+				},
+			}
+
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+		})
+
+		It("should validate with serverImage and relative assets that are prefixed by default ingressPath", func() {
+			resource := &kdexv1alpha1.KDexTheme{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName,
+					Namespace: namespace,
+				},
+				Spec: kdexv1alpha1.KDexThemeSpec{
+					Assets: kdexv1alpha1.Assets{
+						{
+							Attributes: map[string]string{
+								"rel": "stylesheet",
+							},
+							LinkHref: "/-/theme/style.css",
+						},
+					},
+					Backend: kdexv1alpha1.Backend{
+						ServerImage: "foo/bar",
 					},
 				},
 			}
