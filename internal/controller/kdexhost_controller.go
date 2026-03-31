@@ -617,16 +617,16 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 		if internalHost.Status.Attributes == nil {
 			internalHost.Status.Attributes = make(map[string]string)
 		}
-		if internalHost.CreationTimestamp.IsZero() {
-			if internalHost.Annotations == nil {
-				internalHost.Annotations = make(map[string]string)
-			}
-			maps.Copy(internalHost.Annotations, host.Annotations)
-			if internalHost.Labels == nil {
-				internalHost.Labels = make(map[string]string)
-			}
-			maps.Copy(internalHost.Labels, host.Labels)
+		if internalHost.Annotations == nil {
+			internalHost.Annotations = make(map[string]string)
+		}
+		maps.Copy(internalHost.Annotations, host.Annotations)
+		if internalHost.Labels == nil {
+			internalHost.Labels = make(map[string]string)
+		}
+		maps.Copy(internalHost.Labels, host.Labels)
 
+		if internalHost.CreationTimestamp.IsZero() {
 			internalHost.Labels["app.kubernetes.io/name"] = kdexWeb
 			internalHost.Labels["kdex.dev/instance"] = host.Name
 		}
