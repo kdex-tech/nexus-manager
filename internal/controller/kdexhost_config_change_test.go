@@ -42,7 +42,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 		AfterEach(func() {
 			// Restore original configuration defaults if needed
 			// (Assuming the test suite might rely on defaults)
-			
+
 			// Delete the namespace
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
 			_ = k8sClient.Delete(ctx, ns)
@@ -99,7 +99,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 			Eventually(func() string {
 				return mockHelmClient.ChartVersions[resourceName]
 			}, "10s", "500ms").Should(Equal("1.1.0"), "Expected helm chart to be upgraded to new global default version")
-			
+
 			// Cleanup: restore config
 			hostReconciler.Configuration = *originalConfig
 		})
