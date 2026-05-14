@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
@@ -25,11 +26,12 @@ import (
 )
 
 const (
-	AttributeHelmReleaseStatus     = "helm.release.status"
-	AttributeHelmReleaseGeneration = "helm.release.generation"
-	AttributeHelmReleaseHash       = "helm.release.hash"
-	AttributeHelmReleaseError      = "helm.release.error"
-	AttributeHelmReleaseOwner      = "helm.release.owner"
+	AttributeHelmReleaseStatus      = "helm.release.status"
+	AttributeHelmReleaseGeneration  = "helm.release.generation"
+	AttributeHelmReleaseHash        = "helm.release.hash"
+	AttributeHelmReleaseError       = "helm.release.error"
+	AttributeHelmReleaseOwner       = "helm.release.owner"
+	AttributeHelmReleaseLastAttempt = "helm.release.last-attempt"
 
 	HelmStatusInProgress = "in_progress"
 	HelmStatusCompleted  = "completed"
@@ -170,10 +172,33 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		}
 	}
 
-	if (status == HelmStatusCompleted || status == HelmStatusFailed) && recordedHash == currentHash {
-		// Already attempted for this configuration
-		log.Info("reconcileHelmReleases#3", "host", host.Name, "namespace", host.Namespace, "msg", "hash matches, skipping")
+	if status == HelmStatusCompleted && recordedHash == currentHash {
+		// Release is already in the desired state, nothing to do.
+		log.Info("reconcileHelmReleases#3", "host", host.Name, "namespace", host.Namespace, "msg", "hash matches and release is healthy, skipping")
 		return controllerutil.OperationResultNone, nil
+	}
+
+	if status == HelmStatusFailed && recordedHash == currentHash {
+		// Last attempt failed for this same spec. The failure may have been
+		// transient (a network policy that hadn't landed yet, a registry
+		// blip, control-plane pressure during --wait), so we retry instead
+		// of locking the release in a permanent Degraded state. A bounded
+		// backoff governed by r.RequeueDelay keeps us from hammering when
+		// the cause is chronic.
+		if lastAttemptStr := latestHost.Status.Attributes[AttributeHelmReleaseLastAttempt]; lastAttemptStr != "" {
+			if lastAttempt, parseErr := time.Parse(time.RFC3339, lastAttemptStr); parseErr == nil {
+				elapsed := time.Since(lastAttempt)
+				if elapsed < r.RequeueDelay {
+					log.V(2).Info("reconcileHelmReleases#3b",
+						"host", host.Name, "namespace", host.Namespace,
+						"msg", "in backoff after failure",
+						"elapsed", elapsed.String(),
+						"interval", r.RequeueDelay.String())
+					return controllerutil.OperationResultNone, nil
+				}
+			}
+		}
+		log.Info("reconcileHelmReleases#3c", "host", host.Name, "namespace", host.Namespace, "msg", "retrying after prior failure")
 	}
 
 	// Start a new Helm operation asynchronously
@@ -186,6 +211,12 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	host.Status.Attributes[AttributeHelmReleaseGeneration] = strconv.FormatInt(host.Generation, 10)
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
 	delete(host.Status.Attributes, AttributeHelmReleaseError)
+	// Clear LastAttempt at the moment we transition into a new attempt. This
+	// patch operates on freshly-Get'd state, so the diff definitively removes
+	// the key on the server. The complementary delete in updateHelmStatus on
+	// success can race with stale-cache reads; clearing here is the reliable
+	// place to do it.
+	delete(host.Status.Attributes, AttributeHelmReleaseLastAttempt)
 
 	kdexv1alpha1.SetConditions(
 		&host.Status.Conditions,
@@ -295,6 +326,9 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 	if err != nil {
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusFailed
 		host.Status.Attributes[AttributeHelmReleaseError] = err.Error()
+		// Timestamp the failure so the next reconcile can compute backoff
+		// and decide whether to retry (see reconcileHelmReleases#3b/#3c).
+		host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
@@ -307,6 +341,7 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 	} else {
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusCompleted
 		delete(host.Status.Attributes, AttributeHelmReleaseError)
+		delete(host.Status.Attributes, AttributeHelmReleaseLastAttempt)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{

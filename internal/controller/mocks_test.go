@@ -15,7 +15,11 @@ type MockHelmClient struct {
 	ChartVersions     map[string]string
 	SimulateDelay     time.Duration
 	FailInstall       bool
-	FailMessage       string
+	// FailInstallCount makes the next N calls fail and then succeed.
+	// Independent of FailInstall (which is permanent). Used to model a
+	// transient failure followed by recovery.
+	FailInstallCount int
+	FailMessage      string
 }
 
 func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
@@ -24,6 +28,11 @@ func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 	}
 
 	if m.FailInstall {
+		return fmt.Errorf("%s", m.FailMessage)
+	}
+
+	if m.FailInstallCount > 0 {
+		m.FailInstallCount--
 		return fmt.Errorf("%s", m.FailMessage)
 	}
 

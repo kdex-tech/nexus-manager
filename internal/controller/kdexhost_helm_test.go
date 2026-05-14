@@ -256,6 +256,56 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			}, "10s", "1s").Should(BeTrue(), "Expected KDexHost to report failure when helm install fails")
 		})
 
+		It("it must retry helm operation after a transient failure", func() {
+
+			// Fail the first attempt, succeed thereafter. Models a transient
+			// error like a network policy that landed late or a registry blip.
+			// The mock only appends to InstalledCharts on a *successful*
+			// InstallOrUpgrade call, so presence in InstalledCharts is
+			// definitive evidence that a retry occurred after the first call
+			// returned an error.
+			mockHelmClient.FailInstallCount = 1
+			mockHelmClient.FailMessage = "transient: context deadline exceeded"
+
+			resource := createKDexHost(resourceName+"-retry", kdexv1alpha1.KDexHostSpec{
+				BrandName:    "KDex Tech",
+				Organization: "KDex Tech Inc.",
+				Routing: kdexv1alpha1.Routing{
+					Domains: []string{"kdex.dev"},
+				},
+			})
+
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			// Without changing the spec, the controller should retry on its
+			// own after the first failure and the install should succeed.
+			Eventually(func() bool {
+				return slices.Contains(mockHelmClient.InstalledCharts, resource.Name)
+			}, "10s", "100ms").Should(BeTrue(), "Expected helm install to be retried and succeed without a spec change")
+
+			Expect(mockHelmClient.FailInstallCount).To(Equal(0), "Expected the transient failure counter to be decremented exactly once")
+
+			// And the status attributes should reflect the recovered state.
+			Eventually(func() string {
+				checkedHost := &kdexv1alpha1.KDexHost{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, checkedHost); err != nil {
+					return ""
+				}
+				return checkedHost.Status.Attributes[AttributeHelmReleaseStatus]
+			}, "10s", "100ms").Should(Equal(HelmStatusCompleted), "Expected status to flip to completed after retry")
+
+			Eventually(func() string {
+				checkedHost := &kdexv1alpha1.KDexHost{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, checkedHost); err != nil {
+					return "present"
+				}
+				if _, ok := checkedHost.Status.Attributes[AttributeHelmReleaseLastAttempt]; ok {
+					return "present"
+				}
+				return "cleared"
+			}, "10s", "100ms").Should(Equal("cleared"), "Expected last-attempt attribute to be cleared on success")
+		})
+
 		It("it must rollback when an upgrade fails", func() {
 
 			// 1. Successful initial install
