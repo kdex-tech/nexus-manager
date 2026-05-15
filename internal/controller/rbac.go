@@ -11,6 +11,7 @@ package controller
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,                             verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,                                    verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,             verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,               verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps,                                verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps/finalizers,                     verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps/status,                         verbs=get;update;patch
