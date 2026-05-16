@@ -12,12 +12,12 @@ config:
     # (<=0.1.5) bind to port 80 and run as root, incompatible with the
     # restricted profile's CAP_NET_BIND_SERVICE drop and runAsNonRoot
     # requirement.
-    serverImage: ghcr.io/kdex-tech/backend-static:0.1.6
+    serverImage: ghcr.io/kdex-tech/backend-static:0.1.7
     serverImagePullPolicy: IfNotPresent
   defaultImageRegistry: docker.io
   defaultNpmRegistry: registry.npmjs.org
   packages:
-    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.9
+    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.11
     packagerImagePullPolicy: IfNotPresent
     toolsImage: ghcr.io/kdex-tech/node-tools:0.1.2
     toolsImagePullPolicy: IfNotPresent
