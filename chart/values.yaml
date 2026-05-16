@@ -5,7 +5,14 @@ certmanager:
 # [CONFIG]: Configuration for the controller-manager
 config:
   backendDefault:
-    serverImage: ghcr.io/kdex-tech/backend-static:0.1.5
+    # 0.1.6 is the first tag that runs as a non-root user (uid 65532) and
+    # listens on port 8080 instead of 80 - required for the embedded
+    # default BackendDefault.Deployment template in kdex-crds to actually
+    # admit Pods under PodSecurity "restricted" namespaces. Earlier tags
+    # (<=0.1.5) bind to port 80 and run as root, incompatible with the
+    # restricted profile's CAP_NET_BIND_SERVICE drop and runAsNonRoot
+    # requirement.
+    serverImage: ghcr.io/kdex-tech/backend-static:0.1.6
     serverImagePullPolicy: IfNotPresent
   defaultImageRegistry: docker.io
   defaultNpmRegistry: registry.npmjs.org
