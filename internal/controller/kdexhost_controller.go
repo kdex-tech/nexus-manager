@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -41,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -148,7 +150,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.V(2).Info("status", "status", host.Status, "err", err, "res", res)
 	}()
 
-	secrets, err := ResolveSecrets(ctx, r.Client, &host.Status, host.Namespace, host.Spec.Secrets)
+	secrets, err := ResolveSecrets(ctx, r.Client, &host.Status, host.Namespace, host.Spec.SecretSelector)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -590,7 +592,40 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}")).
 		Watches(
 			&corev1.Secret{},
-			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.Secrets}")).
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				secret, ok := obj.(*corev1.Secret)
+				if !ok {
+					return nil
+				}
+
+				var hostList kdexv1alpha1.KDexHostList
+				if err := r.List(ctx, &hostList, client.InNamespace(secret.Namespace)); err != nil {
+					return nil
+				}
+
+				var requests []reconcile.Request
+				secretLabels := labels.Set(secret.Labels)
+				for i := range hostList.Items {
+					host := &hostList.Items[i]
+					if host.Spec.SecretSelector == nil {
+						continue
+					}
+					sel, err := metav1.LabelSelectorAsSelector(host.Spec.SecretSelector)
+					if err != nil {
+						continue
+					}
+					if !sel.Matches(secretLabels) {
+						continue
+					}
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      host.Name,
+							Namespace: host.Namespace,
+						},
+					})
+				}
+				return requests
+			})).
 		WithOptions(controller.TypedOptions[reconcile.Request]{
 			LogConstructor: LogConstructor("kdexhost", mgr),
 		}).
