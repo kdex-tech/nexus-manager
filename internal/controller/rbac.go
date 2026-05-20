@@ -101,3 +101,4 @@ package controller
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,                      verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,    verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,           verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=serving.knative.dev,resources=services,                     verbs=get;list;watch;create;update;patch;delete

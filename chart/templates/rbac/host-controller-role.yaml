@@ -171,4 +171,23 @@ rules:
   - patch
   - update
   - watch
+# host-manager's chart-rendered ClusterRole (kdex-tech/host-manager v0.2.58+)
+# adds serving.knative.dev/services so the deployer Job (running as the
+# host-manager SA) can apply the Knative Service it generates. Mirror the
+# grant here so the privilege-escalation guard accepts the upgrade —
+# without this, helm-upgrade fails with "user
+# system:serviceaccount:kcnas-system:kcnas-operator is attempting to
+# grant RBAC permissions not currently held."
+- apiGroups:
+  - serving.knative.dev
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 {{- end -}}
