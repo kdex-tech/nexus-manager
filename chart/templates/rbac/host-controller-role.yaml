@@ -55,6 +55,22 @@ rules:
   - patch
   - update
   - watch
+# host-manager v0.2.70+ adds discovery.k8s.io/endpointslices {get,list,watch}
+# to its chart-rendered ClusterRole so the new EndpointSlice watch on the
+# KDexFunctionReconciler can sync the cache (used to drive readiness
+# oscillation for Service-backed KDexFunctions). Mirror the grant here so
+# the privilege-escalation guard accepts the upgrade — without this,
+# helm-upgrade of the per-host release fails with "user
+# system:serviceaccount:kcnas-system:kcnas-operator is attempting to
+# grant RBAC permissions not currently held."
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
