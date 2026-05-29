@@ -58,6 +58,13 @@ type helmOperation struct {
 	hash   string
 }
 
+// cachedHelmClient pairs a Helm client with a hash of the secrets it was
+// created with, so a credential change can be detected and the client rebuilt.
+type cachedHelmClient struct {
+	client utils.HelmClientInterface
+	hash   string
+}
+
 // KDexHostReconciler reconciles a KDexHost object
 type KDexHostReconciler struct {
 	client.Client
@@ -70,7 +77,7 @@ type KDexHostReconciler struct {
 
 	activeHelmOperations map[types.NamespacedName]helmOperation
 	mu                   sync.RWMutex
-	helmClients          map[string]utils.HelmClientInterface
+	helmClients          map[string]cachedHelmClient
 }
 
 // nolint:gocyclo
@@ -715,7 +722,7 @@ func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) err
 	defer r.mu.Unlock()
 
 	if r.helmClients == nil {
-		r.helmClients = map[string]utils.HelmClientInterface{}
+		r.helmClients = map[string]cachedHelmClient{}
 	}
 
 	delete(r.helmClients, name+"-"+namespace)
@@ -728,19 +735,26 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	defer r.mu.Unlock()
 
 	if r.helmClients == nil {
-		r.helmClients = map[string]utils.HelmClientInterface{}
+		r.helmClients = map[string]cachedHelmClient{}
 	}
 
-	helmClient, ok := r.helmClients[name+"-"+namespace]
+	key := name + "-" + namespace
+	hash := utils.Hash(secrets)
 
-	if !ok {
-		var err error
-		if helmClient, err = r.HelmClientFactory(namespace, secrets, logger); err != nil {
+	cached, ok := r.helmClients[key]
+
+	// Rebuild the client when there is no cached entry, or when the resolved
+	// secrets have changed (e.g. registry credential rotation). Reusing a stale
+	// client would keep installing/upgrading charts with dead credentials.
+	if !ok || cached.hash != hash {
+		client, err := r.HelmClientFactory(namespace, secrets, logger)
+		if err != nil {
 			return nil, err
 		}
 
-		r.helmClients[name+"-"+namespace] = helmClient
+		cached = cachedHelmClient{client: client, hash: hash}
+		r.helmClients[key] = cached
 	}
 
-	return helmClient, nil
+	return cached.client, nil
 }
