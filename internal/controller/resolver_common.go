@@ -57,6 +57,26 @@ func ResolveContents(
 			appSpec = &v.Spec
 		}
 
+		if appSpec == nil {
+			// The entry had no rawHTML and its appRef was missing or resolved
+			// to something that is not a KDexApp/KDexClusterApp. Fail with a
+			// descriptive error instead of dereferencing a nil *KDexAppSpec.
+			err := fmt.Errorf(
+				"content entry for slot %q has no rawHTML and no resolvable KDexApp/KDexClusterApp reference",
+				contentEntry.Slot)
+			kdexv1alpha1.SetConditions(
+				referrerConditions,
+				kdexv1alpha1.ConditionStatuses{
+					Degraded:    metav1.ConditionTrue,
+					Progressing: metav1.ConditionFalse,
+					Ready:       metav1.ConditionFalse,
+				},
+				kdexv1alpha1.ConditionReasonReconcileError,
+				err.Error(),
+			)
+			return nil, true, ctrl.Result{}, err
+		}
+
 		contents[contentEntry.Slot] = page.ResolvedContentEntry{
 			AppObj:            app,
 			Attributes:        contentEntry.Attributes,
