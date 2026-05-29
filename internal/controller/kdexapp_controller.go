@@ -145,6 +145,10 @@ func (r *KDexAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, err
 	}
 
+	// Validation succeeded: reset the retry counter so a future transient
+	// failure gets the full retry budget instead of resuming from a stale count.
+	delete(status.Attributes, "validation.attempts")
+
 	kdexv1alpha1.SetConditions(
 		&status.Conditions,
 		kdexv1alpha1.ConditionStatuses{
