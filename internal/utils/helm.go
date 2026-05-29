@@ -222,7 +222,7 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 		if idx := strings.Index(repo, "//"); idx > -1 {
 			repo = repo[idx+2:]
 		}
-		return strings.HasPrefix(reg, repo)
+		return registryMatches(reg, repo)
 	})
 
 	if match != nil {
@@ -262,6 +262,26 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 	h.actionConfig.RegistryClient = regClient
 
 	return nil
+}
+
+// registryMatches reports whether a chart registry reference (host[/path], with
+// any scheme already stripped) belongs to the registry identified by a Helm
+// secret's repository value (also host[/path], scheme stripped).
+//
+// The match is anchored on a path-segment boundary so a credential is only
+// offered to the registry it was issued for. A plain strings.HasPrefix would
+// leak credentials to look-alike hosts (e.g. secret "myregistry.io" matching a
+// chart at "myregistry.io.attacker.com/..."), and an empty repository would
+// match every registry. Both are rejected here.
+func registryMatches(reg, repo string) bool {
+	if repo == "" {
+		return false
+	}
+	if reg == repo {
+		return true
+	}
+	// reg must extend repo at a path boundary, i.e. reg == repo + "/" + ...
+	return strings.HasPrefix(reg, repo+"/")
 }
 
 func (h *HelmClient) releaseExists(name string) (bool, error) {
