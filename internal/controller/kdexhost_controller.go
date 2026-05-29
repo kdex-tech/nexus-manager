@@ -747,12 +747,12 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	// secrets have changed (e.g. registry credential rotation). Reusing a stale
 	// client would keep installing/upgrading charts with dead credentials.
 	if !ok || cached.hash != hash {
-		client, err := r.HelmClientFactory(namespace, secrets, logger)
+		helmClient, err := r.HelmClientFactory(namespace, secrets, logger)
 		if err != nil {
 			return nil, err
 		}
 
-		cached = cachedHelmClient{client: client, hash: hash}
+		cached = cachedHelmClient{client: helmClient, hash: hash}
 		r.helmClients[key] = cached
 	}
 
