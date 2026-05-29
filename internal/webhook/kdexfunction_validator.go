@@ -107,15 +107,25 @@ func (v *KDexFunctionValidator[T]) validateOpenAPI(spec *kdexv1alpha1.KDexFuncti
 	securitySchemes := components["securitySchemes"].(map[string]any)
 
 	collector := func(op map[string]any) {
-		if v, ok := op["security"]; ok {
-			arr := v.([]any)
-			for _, itm := range arr {
-				m := itm.(map[string]any)
-				for k := range m {
-					securitySchemes[k] = map[string]any{
-						"type":   "http",
-						"scheme": "bearer",
-					}
+		v, ok := op["security"]
+		if !ok {
+			return
+		}
+		// security is user-supplied JSON; tolerate the wrong shape instead of
+		// panicking on an unchecked type assertion.
+		arr, ok := v.([]any)
+		if !ok {
+			return
+		}
+		for _, itm := range arr {
+			m, ok := itm.(map[string]any)
+			if !ok {
+				continue
+			}
+			for k := range m {
+				securitySchemes[k] = map[string]any{
+					"type":   "http",
+					"scheme": "bearer",
 				}
 			}
 		}
