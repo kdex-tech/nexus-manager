@@ -349,6 +349,11 @@ func ResolveSecret(
 
 			return nil, true, ctrl.Result{RequeueAfter: requeueDelay}, nil
 		}
+
+		// Any other error (timeout, forbidden, server error, ...) must be
+		// propagated so the reconcile retries instead of silently proceeding
+		// with an empty Secret.
+		return nil, true, ctrl.Result{}, err
 	}
 
 	return &secret, false, ctrl.Result{}, nil
