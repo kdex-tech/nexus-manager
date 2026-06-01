@@ -6,6 +6,6 @@ spec:
   content: |
     <footer class="page-footer">
       <div>
-        <small>&copy; [[ .LastModified.Year ]] [[ .Organization ]] [[ l10n "all-rights-reserved" ]]</small>
+        <small>&copy; [[ date .LastModified "year" ]] [[ .Organization ]] [[ l10n "all-rights-reserved" ]]</small>
       </div>
     </footer>
