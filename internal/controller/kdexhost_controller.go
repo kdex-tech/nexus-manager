@@ -304,33 +304,46 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return r1, err
 	}
 
+	// Optional references (ThemeRef, ScriptLibraryRef) are resolved for status
+	// tracking, but a missing or not-yet-ready reference must NOT abort the
+	// reconcile: the rest of the spec still has to be mirrored to the
+	// KDexInternalHost so unrelated changes (e.g. a host-manager version bump
+	// carrying security fixes) reach the downstream controller. We record the
+	// dependency in status and requeue after mirroring instead of returning
+	// early here. The Watches on KDexTheme / KDexClusterTheme drive the
+	// event-driven recovery once the reference appears. See issue #2.
+	refsUnresolved := false
+	refsRequeue := ctrl.Result{}
+	noteUnresolvedRef := func(message string, r1 ctrl.Result) {
+		refsUnresolved = true
+		if r1.RequeueAfter > refsRequeue.RequeueAfter {
+			refsRequeue = r1
+		}
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionFalse,
+				Progressing: metav1.ConditionTrue,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconciling,
+			message,
+		)
+	}
+
 	var themeObj runtime.Object
 	if host.Spec.ThemeRef != nil {
 		themeObj, shouldReturn, r1, err = ResolveKDexObjectReference(ctx, r.Client, &host, &host.Status.Conditions, host.Spec.ThemeRef, r.RequeueDelay)
 		if shouldReturn {
-			if err == nil && r1.RequeueAfter > 0 {
-				return r1, nil
-			}
-
 			message := "failed to resolve theme"
 			if err != nil {
 				message = err.Error()
 			}
-
-			kdexv1alpha1.SetConditions(
-				&host.Status.Conditions,
-				kdexv1alpha1.ConditionStatuses{
-					Degraded:    metav1.ConditionTrue,
-					Progressing: metav1.ConditionFalse,
-					Ready:       metav1.ConditionFalse,
-				},
-				kdexv1alpha1.ConditionReasonReconcileSuccess,
-				message,
-			)
-			return r1, err
-		}
-
-		if themeObj != nil {
+			noteUnresolvedRef(message, r1)
+			// Swallow the resolution error so reconcile continues to the spec
+			// mirror below; recovery is event-driven via Watches plus requeue.
+			err = nil
+		} else if themeObj != nil {
 			if host.Status.Attributes == nil {
 				host.Status.Attributes = make(map[string]string)
 			}
@@ -343,29 +356,13 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		var r1 ctrl.Result
 		scriptLibraryObj, shouldReturn, r1, err = ResolveKDexObjectReference(ctx, r.Client, &host, &host.Status.Conditions, host.Spec.ScriptLibraryRef, r.RequeueDelay)
 		if shouldReturn {
-			if err == nil && r1.RequeueAfter > 0 {
-				return r1, nil
-			}
-
 			message := "failed to resolve script library"
 			if err != nil {
 				message = err.Error()
 			}
-
-			kdexv1alpha1.SetConditions(
-				&host.Status.Conditions,
-				kdexv1alpha1.ConditionStatuses{
-					Degraded:    metav1.ConditionTrue,
-					Progressing: metav1.ConditionFalse,
-					Ready:       metav1.ConditionFalse,
-				},
-				kdexv1alpha1.ConditionReasonReconcileSuccess,
-				message,
-			)
-			return r1, err
-		}
-
-		if scriptLibraryObj != nil {
+			noteUnresolvedRef(message, r1)
+			err = nil
+		} else if scriptLibraryObj != nil {
 			if host.Status.Attributes == nil {
 				host.Status.Attributes = make(map[string]string)
 			}
@@ -435,6 +432,17 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}
 
 	log.Info("reconciled", "host", host.Name, "namespace", host.Namespace, "helmOp", helmOp, "internalHostOp", internalHostOp)
+
+	// If an optional reference (theme, script library) was unresolved, the spec
+	// has now been mirrored to the KDexInternalHost. Stop here with the
+	// Progressing condition set above and requeue; the host is not Ready until
+	// the reference resolves, but its spec changes have already propagated. See
+	// issue #2.
+	if refsUnresolved {
+		log.Info("host has unresolved references; mirrored spec to internal host, requeuing",
+			"host", host.Name, "namespace", host.Namespace)
+		return refsRequeue, nil
+	}
 
 	// Sequential readiness checks:
 	// 1. Helm Operation Status
