@@ -404,6 +404,46 @@ func TestKDexFunctionValidator_ValidateOpenAPI(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("path-level parameters", func(t *testing.T) {
+		// Parameters declared at the path-item level (not duplicated inside
+		// each operation) must satisfy templated path segments. See issue #18.
+		spec := &kdexv1alpha1.KDexFunctionSpec{
+			API: kdexv1alpha1.API{
+				BasePath: "/api/v1/vector_stores",
+				Paths: map[string]kdexv1alpha1.PathItem{
+					"/api/v1/vector_stores/{vector_store_id}": {
+						Parameters: []runtime.RawExtension{
+							{Raw: []byte(`{
+								"name": "vector_store_id",
+								"in": "path",
+								"required": true,
+								"schema": {"type": "string"}
+							}`)},
+						},
+					},
+				},
+			},
+		}
+
+		// GET operation does NOT redeclare the path parameter; it relies on the
+		// path-level declaration above.
+		getOp := []byte(`{
+			"summary": "Get vector store",
+			"operationId": "getVectorStore",
+			"responses": {
+				"200": {
+					"description": "OK"
+				}
+			}
+		}`)
+		pathItem := spec.API.Paths["/api/v1/vector_stores/{vector_store_id}"]
+		pathItem.Get = &runtime.RawExtension{Raw: getOp}
+		spec.API.Paths["/api/v1/vector_stores/{vector_store_id}"] = pathItem
+
+		err := validator.validateOpenAPI(spec)
+		assert.NoError(t, err)
+	})
+
 	t.Run("path with security", func(t *testing.T) {
 		spec := &kdexv1alpha1.KDexFunctionSpec{
 			API: kdexv1alpha1.API{
