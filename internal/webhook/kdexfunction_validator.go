@@ -159,6 +159,22 @@ func (v *KDexFunctionValidator[T]) validateOpenAPI(spec *kdexv1alpha1.KDexFuncti
 			}
 		}
 
+		// Copy path-level OpenAPI parameters. Parameters declared at the
+		// path-item level apply to every operation under the path, so they must
+		// be carried into the synthesized doc; otherwise the validator sees
+		// templated path segments with no matching parameter declaration. See
+		// issue #18.
+		if len(pathItem.Parameters) > 0 {
+			params := make([]any, 0, len(pathItem.Parameters))
+			for _, paramRaw := range pathItem.Parameters {
+				var p any
+				if err := json.Unmarshal(paramRaw.Raw, &p); err == nil {
+					params = append(params, p)
+				}
+			}
+			pathObj["parameters"] = params
+		}
+
 		paths[pathKey] = pathObj
 	}
 	openAPIDoc["paths"] = paths
