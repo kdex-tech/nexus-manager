@@ -664,13 +664,23 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	}
 
 	op, err := ctrl.CreateOrUpdate(ctx, r.Client, internalHost, func() error {
-		if internalHost.Status.Attributes == nil {
-			internalHost.Status.Attributes = make(map[string]string)
+		// NOTE: only mutate spec/metadata here. ctrl.CreateOrUpdate diffs the
+		// whole object and issues an Update when it changes, but Update does not
+		// persist the status subresource. Initializing internalHost.Status here
+		// made the in-memory object differ from the fetched one on every pass
+		// (the empty map is never persisted), so CreateOrUpdate issued a
+		// needless Update each reconcile, bumping resourceVersion and fanning
+		// out downstream watchers for no semantic change. See issue #19.
+		// Only allocate the maps when there is something to copy. Initializing
+		// an empty map that the apiserver then drops to nil on persist makes the
+		// in-memory object differ from the fetched one on every pass, which
+		// would defeat the no-op detection below. See issue #19.
+		if len(host.Annotations) > 0 {
+			if internalHost.Annotations == nil {
+				internalHost.Annotations = make(map[string]string)
+			}
+			maps.Copy(internalHost.Annotations, host.Annotations)
 		}
-		if internalHost.Annotations == nil {
-			internalHost.Annotations = make(map[string]string)
-		}
-		maps.Copy(internalHost.Annotations, host.Annotations)
 		if internalHost.Labels == nil {
 			internalHost.Labels = make(map[string]string)
 		}
