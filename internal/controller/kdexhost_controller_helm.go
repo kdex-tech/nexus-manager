@@ -252,6 +252,30 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	return controllerutil.OperationResultUpdated, nil
 }
 
+// acquireHelmRenderSlot blocks until a global render slot is available or ctx is
+// cancelled, bounding the number of concurrent in-process Helm renders to
+// HelmRenderConcurrency regardless of fleet size (issue #24). It returns a
+// release func and whether a slot was acquired; when concurrency is not bounded
+// (HelmRenderConcurrency <= 0) it returns immediately.
+func (r *KDexHostReconciler) acquireHelmRenderSlot(ctx context.Context) (func(), bool) {
+	r.helmRenderSemOnce.Do(func() {
+		if r.HelmRenderConcurrency > 0 {
+			r.helmRenderSem = make(chan struct{}, r.HelmRenderConcurrency)
+		}
+	})
+
+	if r.helmRenderSem == nil {
+		return func() {}, true
+	}
+
+	select {
+	case r.helmRenderSem <- struct{}{}:
+		return func() { <-r.helmRenderSem }, true
+	case <-ctx.Done():
+		return func() {}, false
+	}
+}
+
 func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	ctx context.Context,
 	namespace, name string,
@@ -275,6 +299,18 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
 		return
 	}
+
+	// Gate the heavy chart load + render behind the global concurrency bound.
+	// Goroutines that are waiting here hold only their stack, not a render's
+	// heap footprint, so peak memory stays a function of HelmRenderConcurrency
+	// rather than the number of hosts. See issue #24.
+	release, ok := r.acquireHelmRenderSlot(ctx)
+	if !ok {
+		log.V(2).Info("helm render cancelled while waiting for a render slot", "namespace", namespace, "name", name)
+		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
+		return
+	}
+	defer release()
 
 	c, err := r.getOrCreateHelmClient(
 		host.Name,

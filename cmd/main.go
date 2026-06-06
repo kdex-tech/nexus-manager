@@ -70,6 +70,7 @@ func main() {
 	var configFile string
 	namedLogLevels := make(kdexlog.NamedLogLevelPairs)
 	var requeueDelaySeconds int
+	var helmRenderConcurrency int
 
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -84,6 +85,9 @@ func main() {
 	flag.Var(&namedLogLevels, "named-log-level", "Specify a named log level pair (format: NAME=LEVEL) (can be used "+
 		"multiple times)")
 	flag.IntVar(&requeueDelaySeconds, "requeue-delay-seconds", 15, "Set the delay for requeuing reconciliation loops")
+	flag.IntVar(&helmRenderConcurrency, "helm-render-concurrency", 1, "Maximum number of host-manager Helm renders that may run "+
+		"concurrently across the fleet. Helm renders load the chart into the operator heap, so this bounds peak render memory "+
+		"independent of fleet size. A value <= 0 means unbounded.")
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -243,8 +247,9 @@ func main() {
 		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
 			return utils.NewHelmClient(namespace, secrets, logger)
 		},
-		RequeueDelay: requeueDelay,
-		Scheme:       mgr.GetScheme(),
+		HelmRenderConcurrency: helmRenderConcurrency,
+		RequeueDelay:          requeueDelay,
+		Scheme:                mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KDexHost")
 		os.Exit(1)
