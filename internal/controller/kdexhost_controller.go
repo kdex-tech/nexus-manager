@@ -75,9 +75,20 @@ type KDexHostReconciler struct {
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
+	// HelmRenderConcurrency bounds the number of in-process Helm renders that
+	// may run simultaneously across the whole fleet. Helm renders load and
+	// decompress the chart into the operator heap, so peak memory scales with
+	// the number of concurrent renders, not the fleet size — left unbounded a
+	// cluster-wide config change stampedes every host's render at once and can
+	// OOM-kill the operator. A value <= 0 means unbounded (legacy behavior).
+	// See issue #24.
+	HelmRenderConcurrency int
+
 	activeHelmOperations map[types.NamespacedName]helmOperation
 	mu                   sync.RWMutex
 	helmClients          map[string]cachedHelmClient
+	helmRenderSem        chan struct{}
+	helmRenderSemOnce    sync.Once
 }
 
 // nolint:gocyclo
