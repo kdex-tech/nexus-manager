@@ -110,7 +110,17 @@ func (r *KDexScriptLibraryReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	)
 
 	if spec.PackageReference != nil {
-		secret, shouldReturn, r1, err := ResolveSecret(ctx, r.Client, o, &status.Conditions, spec.PackageReference.SecretRef, r.RequeueDelay)
+		// Fall back to the cluster-default npm credential when the resource
+		// brings no secretRef of its own. This is what lets the bundled
+		// kdex-default-script-library (which carries no secretRef) authenticate
+		// against an authenticated DefaultNpmRegistry instead of 401ing.
+		// Resources with their own secretRef are unaffected.
+		secretRef := spec.PackageReference.SecretRef
+		if secretRef == nil {
+			secretRef = r.Configuration.DefaultNpmSecretRef
+		}
+
+		secret, shouldReturn, r1, err := ResolveSecret(ctx, r.Client, o, &status.Conditions, secretRef, r.RequeueDelay)
 		if shouldReturn {
 			return r1, err
 		}
@@ -200,6 +210,15 @@ func (r *KDexScriptLibraryReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexClusterScriptLibrary{}, &kdexv1alpha1.KDexClusterScriptLibraryList{}, "{.Spec.PackageReference.SecretRef}")).
+		// Requeue resources that fall back to the cluster-default npm credential
+		// when that default Secret changes (e.g. rotation). The reference-path
+		// watches above only catch resources that name a Secret explicitly.
+		Watches(
+			&corev1.Secret{},
+			MakeHandlerForDefaultSecret(r.Client, &kdexv1alpha1.KDexScriptLibraryList{}, r.Configuration.DefaultNpmSecretRef)).
+		Watches(
+			&corev1.Secret{},
+			MakeHandlerForDefaultSecret(r.Client, &kdexv1alpha1.KDexClusterScriptLibraryList{}, r.Configuration.DefaultNpmSecretRef)).
 		WithOptions(controller.TypedOptions[reconcile.Request]{
 			LogConstructor: LogConstructor("kdexscriptlibrary", mgr),
 		}).

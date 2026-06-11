@@ -183,6 +183,72 @@ func MakeHandlerByReferencePath(
 	})
 }
 
+// MakeHandlerForDefaultSecret enqueues every item in list whenever the
+// cluster-default credential Secret named by defaultRef changes. The
+// per-resource secretRef watches (MakeHandlerByReferencePath) only fire for
+// resources that name a Secret explicitly; resources that fall back to the
+// NexusConfiguration default carry no such reference, so without this the
+// default Secret would behave as a fixed snapshot — a rotation (e.g. ESO) of
+// the default credential would never requeue the dependent reconciles. We
+// enqueue all items rather than only the ones currently relying on the default:
+// reconciling a resource that has its own secretRef is idempotent, and
+// default-secret change events are rare (rotation), so the extra work is
+// negligible and avoids re-deriving per-item fallback state in the handler.
+func MakeHandlerForDefaultSecret(
+	c client.Client,
+	list client.ObjectList,
+	defaultRef *kdexv1alpha1.KDexObjectReference,
+) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, o client.Object) []reconcile.Request {
+		return defaultSecretRequests(ctx, c, list, defaultRef, o)
+	})
+}
+
+// defaultSecretRequests returns a reconcile request for every item in list when
+// the changed Secret o is the cluster-default credential named by defaultRef,
+// and nil otherwise. An empty defaultRef.Namespace matches the Secret in any
+// namespace (name-only); an explicit namespace must match exactly. Split out
+// from MakeHandlerForDefaultSecret so the mapping logic is unit-testable
+// without standing up a controller manager.
+func defaultSecretRequests(
+	ctx context.Context,
+	c client.Client,
+	list client.ObjectList,
+	defaultRef *kdexv1alpha1.KDexObjectReference,
+	o client.Object,
+) []reconcile.Request {
+	if defaultRef == nil || defaultRef.Name == "" {
+		return nil
+	}
+	if o.GetName() != defaultRef.Name {
+		return nil
+	}
+	if defaultRef.Namespace != "" && o.GetNamespace() != defaultRef.Namespace {
+		return nil
+	}
+
+	if err := c.List(ctx, list); err != nil {
+		return nil
+	}
+
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(items))
+	for _, i := range items {
+		item := i.(client.Object)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      item.GetName(),
+				Namespace: item.GetNamespace(),
+			},
+		})
+	}
+	return requests
+}
+
 func MergeEnvVars(existing []corev1.EnvVar, overrides []corev1.EnvVar) []corev1.EnvVar {
 	// Create a map to track the index of existing environment variables
 	indexMap := make(map[string]int)

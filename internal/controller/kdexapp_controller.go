@@ -109,7 +109,16 @@ func (r *KDexAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		"Reconciling",
 	)
 
-	secret, shouldReturn, r1, err := ResolveSecret(ctx, r.Client, o, &status.Conditions, spec.PackageReference.SecretRef, r.RequeueDelay)
+	// Fall back to the cluster-default npm credential when the resource brings
+	// no secretRef of its own. This lets bundled cluster-defaults (and any
+	// resource that omits a secretRef) authenticate against an authenticated
+	// DefaultNpmRegistry. Resources with their own secretRef are unaffected.
+	secretRef := spec.PackageReference.SecretRef
+	if secretRef == nil {
+		secretRef = r.Configuration.DefaultNpmSecretRef
+	}
+
+	secret, shouldReturn, r1, err := ResolveSecret(ctx, r.Client, o, &status.Conditions, secretRef, r.RequeueDelay)
 	if shouldReturn {
 		return r1, err
 	}
@@ -198,6 +207,15 @@ func (r *KDexAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexClusterApp{}, &kdexv1alpha1.KDexClusterAppList{}, "{.Spec.PackageReference.SecretRef}")).
+		// Requeue resources that fall back to the cluster-default npm credential
+		// when that default Secret changes (e.g. rotation). The reference-path
+		// watches above only catch resources that name a Secret explicitly.
+		Watches(
+			&corev1.Secret{},
+			MakeHandlerForDefaultSecret(r.Client, &kdexv1alpha1.KDexAppList{}, r.Configuration.DefaultNpmSecretRef)).
+		Watches(
+			&corev1.Secret{},
+			MakeHandlerForDefaultSecret(r.Client, &kdexv1alpha1.KDexClusterAppList{}, r.Configuration.DefaultNpmSecretRef)).
 		WithOptions(controller.TypedOptions[reconcile.Request]{
 			LogConstructor: LogConstructor("kdexapp", mgr),
 		}).

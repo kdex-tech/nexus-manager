@@ -417,6 +417,20 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 		vals["env"] = host.Spec.Env
 	}
 
+	// Seed cluster-wide default top-level chart values from NexusConfiguration
+	// (e.g. resources, extraArgs, valkey topology). These land at the top level
+	// alongside "config" and are merged UNDER the per-host overrides below, so a
+	// per-host spec.helm.hostManager.values always wins. CoalesceTables merges at
+	// top-level-key granularity, which matches how the chart reads `resources`
+	// (whole-map `toYaml .Values.resources`).
+	if defaults := r.Configuration.HostDefault.Chart.Values; defaults != nil && len(defaults.Raw) > 0 {
+		defaultVals, err := common.ReadValues(defaults.Raw)
+		if err != nil {
+			return err
+		}
+		vals = util.CoalesceTables(vals, defaultVals)
+	}
+
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
 		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
 		if err != nil {
