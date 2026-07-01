@@ -20,12 +20,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/kdex-tech/nexus-manager/internal/validation"
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -81,9 +83,20 @@ func (r *KDexAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		status.Attributes = make(map[string]string)
 	}
 
+	// Snapshot the status as observed. The deferred write is skipped when the
+	// reconcile produces an identical status, so a settled KDexApp is not
+	// rewritten on every pass. Without this guard the write is never a no-op:
+	// resourceVersion churns and the For(KDexApp) watch self-fires, a reconcile
+	// storm that also re-enqueues every downstream page. See issue #31.
+	observedStatus := status.DeepCopy()
+
 	// Defer status update
 	defer func() {
 		status.ObservedGeneration = om.Generation
+		if kdexObjectStatusEqual(observedStatus, status) {
+			log.V(3).Info("status unchanged, skipping update")
+			return
+		}
 		updateErr := r.Status().Update(ctx, o)
 		if updateErr != nil {
 			if errors.IsConflict(updateErr) {
@@ -98,16 +111,12 @@ func (r *KDexAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		log.V(3).Info("status", "status", status, "err", err, "res", res)
 	}()
 
-	kdexv1alpha1.SetConditions(
-		&status.Conditions,
-		kdexv1alpha1.ConditionStatuses{
-			Degraded:    metav1.ConditionFalse,
-			Progressing: metav1.ConditionTrue,
-			Ready:       metav1.ConditionUnknown,
-		},
-		kdexv1alpha1.ConditionReasonReconciling,
-		"Reconciling",
-	)
+	// NOTE: intentionally no unconditional "Reconciling" pulse here. Pulsing
+	// Ready=Unknown/Progressing=True at the top of every reconcile and then
+	// settling back moves the conditions' lastTransitionTime each pass, which
+	// (with the guard above) is never even persisted but, before it, was the
+	// engine of the self-fire loop. Conditions are set below once the reconcile
+	// reaches a definitive state. See issue #31.
 
 	// Fall back to the cluster-default npm credential when the resource brings
 	// no secretRef of its own. This lets bundled cluster-defaults (and any
@@ -221,4 +230,30 @@ func (r *KDexAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}).
 		Named("kdexapp").
 		Complete(r)
+}
+
+// kdexObjectStatusEqual reports whether two KDexObjectStatus values are
+// semantically equal, ignoring each condition's LastTransitionTime. Per the
+// Kubernetes API convention, LastTransitionTime advances only on a real status
+// transition, so ignoring it lets a settled reconcile recognize a genuine
+// no-op and skip the status write that would otherwise churn resourceVersion
+// and self-fire the For() watch. See issue #31.
+func kdexObjectStatusEqual(a, b *kdexv1alpha1.KDexObjectStatus) bool {
+	ac := a.DeepCopy()
+	bc := b.DeepCopy()
+	normalizeStatusConditionsForCompare(ac)
+	normalizeStatusConditionsForCompare(bc)
+	return apiequality.Semantic.DeepEqual(ac, bc)
+}
+
+// normalizeStatusConditionsForCompare zeroes each condition's
+// LastTransitionTime and sorts the conditions by type so two statuses can be
+// compared for a semantic (transition-time-independent) difference.
+func normalizeStatusConditionsForCompare(s *kdexv1alpha1.KDexObjectStatus) {
+	for i := range s.Conditions {
+		s.Conditions[i].LastTransitionTime = metav1.Time{}
+	}
+	sort.Slice(s.Conditions, func(i, j int) bool {
+		return s.Conditions[i].Type < s.Conditions[j].Type
+	})
 }
