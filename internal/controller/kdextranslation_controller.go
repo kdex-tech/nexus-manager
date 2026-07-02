@@ -70,9 +70,21 @@ func (r *KDexTranslationReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		status.Attributes = make(map[string]string)
 	}
 
+	// Snapshot the status as observed. The deferred write is skipped when the
+	// reconcile produces an identical status, so a settled KDexTranslation is
+	// not rewritten on every pass. Without this guard the write is never a
+	// no-op: resourceVersion churns and the For(KDexTranslation) watch
+	// self-fires, a reconcile storm that also re-enqueues every downstream
+	// page. See issue #31.
+	observedStatus := status.DeepCopy()
+
 	// Defer status update
 	defer func() {
 		status.ObservedGeneration = om.Generation
+		if kdexObjectStatusEqual(observedStatus, status) {
+			log.V(3).Info("status unchanged, skipping update")
+			return
+		}
 		updateErr := r.Status().Update(ctx, o)
 		if updateErr != nil {
 			if errors.IsConflict(updateErr) {
@@ -87,16 +99,12 @@ func (r *KDexTranslationReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.V(3).Info("status", "status", status, "err", err, "res", res)
 	}()
 
-	kdexv1alpha1.SetConditions(
-		&status.Conditions,
-		kdexv1alpha1.ConditionStatuses{
-			Degraded:    metav1.ConditionFalse,
-			Progressing: metav1.ConditionTrue,
-			Ready:       metav1.ConditionUnknown,
-		},
-		kdexv1alpha1.ConditionReasonReconciling,
-		"Reconciling",
-	)
+	// NOTE: intentionally no unconditional "Reconciling" pulse here. Pulsing
+	// Ready=Unknown/Progressing=True at the top of every reconcile and then
+	// settling back moves the conditions' lastTransitionTime each pass, which
+	// (with the guard above) is never even persisted but, before it, was the
+	// engine of the self-fire loop. Conditions are set below once the reconcile
+	// reaches a definitive state. See issue #31.
 
 	kdexv1alpha1.SetConditions(
 		&status.Conditions,
