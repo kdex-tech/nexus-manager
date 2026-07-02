@@ -30,3 +30,6 @@ buildkitd.toml
 dist/
 chart/crds
 chart/templates/bundled
+# Local agent/session scratch (not part of the codebase)
+.superpowers/
+.claude/
