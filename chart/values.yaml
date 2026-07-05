@@ -29,6 +29,17 @@ config:
     # download cache across packaging Jobs — reusable ("warm") installs.
     # Empty = ephemeral cache (cold). Operator provisions the PVC (RWO).
     cacheClaim: ""
+    # Packager Job container resources. The memory default is sized for the
+    # bun installer — npm fits in 256Mi, but bun's dependency-resolution peak
+    # does not and OOMKills at a LimitRange's 256Mi default. Raise for large
+    # dependency sets. See kdex-tech/nexus-manager#34.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
 
 # [MANAGER]: Manager Deployment Configurations
 controllerManager:
