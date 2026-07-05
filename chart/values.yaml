@@ -19,8 +19,12 @@ config:
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.11
     packagerImagePullPolicy: IfNotPresent
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.1.2
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.3.0
     toolsImagePullPolicy: IfNotPresent
+    # Packaging-pipeline knobs (node-tools >= 0.3.0, kdex-tech/node-tools#3).
+    # Empty = image defaults (npm + node), byte-identical to prior behavior.
+    installer: ""   # "" (npm) | bun    — dependency install in get_modules
+    runtime: ""     # "" (node) | bun | deno — runs optimize/generate/bundle_cjs
 
 # [MANAGER]: Manager Deployment Configurations
 controllerManager:
