@@ -25,6 +25,10 @@ config:
     # Empty = image defaults (npm + node), byte-identical to prior behavior.
     installer: ""   # "" (npm) | bun    — dependency install in get_modules
     runtime: ""     # "" (node) | bun | deno — runs optimize/generate/bundle_cjs
+    # Per-host PVC (this namespace) mounted at /cache to persist the npm+bun
+    # download cache across packaging Jobs — reusable ("warm") installs.
+    # Empty = ephemeral cache (cold). Operator provisions the PVC (RWO).
+    cacheClaim: ""
 
 # [MANAGER]: Manager Deployment Configurations
 controllerManager:
