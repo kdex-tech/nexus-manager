@@ -19,7 +19,7 @@ config:
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.11
     packagerImagePullPolicy: IfNotPresent
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.3.0
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.3.1
     toolsImagePullPolicy: IfNotPresent
     # Packaging-pipeline knobs (node-tools >= 0.3.0, kdex-tech/node-tools#3).
     # Empty = image defaults (npm + node), byte-identical to prior behavior.
