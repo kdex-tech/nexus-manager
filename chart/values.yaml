@@ -17,7 +17,7 @@ config:
   defaultImageRegistry: docker.io
   defaultNpmRegistry: registry.npmjs.org
   packages:
-    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.11
+    packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.19
     packagerImagePullPolicy: IfNotPresent
     toolsImage: ghcr.io/kdex-tech/node-tools:0.3.2
     toolsImagePullPolicy: IfNotPresent
