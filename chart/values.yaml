@@ -40,6 +40,13 @@ config:
       limits:
         cpu: 500m
         memory: 1Gi
+    # Packager Job pod placement. With none set the pod lands on whatever
+    # untainted node exists — on a segregated cluster that's the cold,
+    # scale-from-zero build pool, adding a node spin-up to every run. Steer it
+    # onto a warm, appropriately-tainted pool. See kdex-tech/nexus-manager#35.
+    nodeSelector: {}      # -> packager Job pod nodeSelector
+    tolerations: []       # -> packager Job pod tolerations
+    affinity: {}          # -> packager Job pod affinity (empty = scheduler default)
 
 # [MANAGER]: Manager Deployment Configurations
 controllerManager:
