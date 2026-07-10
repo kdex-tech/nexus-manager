@@ -12,7 +12,12 @@ config:
     # (<=0.1.5) bind to port 80 and run as root, incompatible with the
     # restricted profile's CAP_NET_BIND_SERVICE drop and runAsNonRoot
     # requirement.
-    serverImage: ghcr.io/kdex-tech/backend-static:0.1.7
+    # 0.1.8 emits a default Cache-Control (no-cache) so browsers honor the
+    # ETag/Last-Modified validators file_server already sets - fixes stale
+    # /-/modules/* app bundles and /-/theme/* assets executing across updates
+    # (kdex-tech/backend-static#3, kdex-tech/host-manager#139). Overridable via
+    # the CACHE_CONTROL env on the backend.
+    serverImage: ghcr.io/kdex-tech/backend-static:0.1.8
     serverImagePullPolicy: IfNotPresent
   defaultImageRegistry: docker.io
   defaultNpmRegistry: registry.npmjs.org
