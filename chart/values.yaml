@@ -24,7 +24,11 @@ config:
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.19
     packagerImagePullPolicy: IfNotPresent
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.3.3
+    # 0.4.0 adds a verification ledger on the packages cache claim. It is a
+    # no-op while packages.cacheClaim is unset below — no claim means no ledger
+    # and the cold verify path every Job, exactly as 0.3.3 behaved — so this
+    # bump is behaviour-preserving until that claim is configured.
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.4.0
     toolsImagePullPolicy: IfNotPresent
     # Packaging-pipeline knobs (node-tools >= 0.3.0, kdex-tech/node-tools#3).
     # Empty = image defaults (npm + node), byte-identical to prior behavior.
