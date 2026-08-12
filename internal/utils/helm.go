@@ -27,6 +27,11 @@ import (
 
 const (
 	trueVal = "true"
+
+	// defaultMaxHistory bounds retained Helm release revisions per release.
+	// Matches the Helm CLI's own --history-max default, which the SDK does not
+	// apply on its own.
+	defaultMaxHistory = 10
 )
 
 // ChartSpec defines the parameters for a Helm chart installation or upgrade.
@@ -388,6 +393,13 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 	client.WaitStrategy = "legacy"
 	client.Timeout = 5 * time.Minute
 	client.Labels = spec.Labels
+	// The Helm SDK default is UNLIMITED history -- `--history-max=10` is a CLI
+	// default that does not reach the SDK. Left unset, every reconcile-driven
+	// upgrade adds a release Secret that is never pruned, and a cluster-config
+	// edit re-renders the whole fleet at once (#27), so the count grows with
+	// cluster age rather than fleet size. Those Secrets are then held by the
+	// operator's cache for the process lifetime (#45).
+	client.MaxHistory = defaultMaxHistory
 
 	if spec.Version != "" {
 		client.Version = spec.Version
