@@ -69,7 +69,10 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 TEST_PKGS ?= $(shell go list ./... | grep -v /e2e)
-TEST_ARGS ?=
+# -race by default: the reconciler runs its Helm work in detached goroutines, so
+# concurrency bugs here are invisible without it. Override with `TEST_ARGS=` to
+# skip (e.g. on a builder without cgo).
+TEST_ARGS ?= -race
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 ifeq ($(DEBUG),true)

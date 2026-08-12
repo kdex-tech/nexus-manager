@@ -99,7 +99,7 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 // chartValueAt walks the recorded chart values for a release down a path of map
 // keys, returning nil if any segment is missing or not a map.
 func chartValueAt(m *MockHelmClient, release string, path ...string) any {
-	v, ok := m.ChartValues[release]
+	v, ok := m.ValuesFor(release)
 	if !ok {
 		return nil
 	}

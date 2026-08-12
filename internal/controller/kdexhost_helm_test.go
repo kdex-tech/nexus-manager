@@ -78,7 +78,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() bool {
-				return slices.Contains(mockHelmClient.InstalledCharts, resourceName)
+				return slices.Contains(mockHelmClient.Installed(), resourceName)
 			}, "10s", "1s").Should(BeTrue(), "Expected helm chart to be installed")
 		})
 
@@ -105,7 +105,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Eventually(func() bool {
 				foundHost := false
 				foundCompanion := false
-				for _, name := range mockHelmClient.InstalledCharts {
+				for _, name := range mockHelmClient.Installed() {
 					if name == resourceName {
 						foundHost = true
 					}
@@ -136,8 +136,8 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() bool {
-				return slices.Contains(mockHelmClient.InstalledCharts, "companion-a") &&
-					slices.Contains(mockHelmClient.InstalledCharts, "companion-b")
+				return slices.Contains(mockHelmClient.Installed(), "companion-a") &&
+					slices.Contains(mockHelmClient.Installed(), "companion-b")
 			}, "10s", "1s").Should(BeTrue(), "Expected both companions to be installed")
 
 			// Drop companion-b from the list.
@@ -153,12 +153,12 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			}, "10s", "1s").Should(Succeed())
 
 			Eventually(func() []string {
-				return mockHelmClient.UninstalledCharts
+				return mockHelmClient.Uninstalled()
 			}, "10s", "1s").Should(ContainElement("companion-b"), "Expected the removed companion to be uninstalled")
 
 			// The still-declared companion and the host-manager release must survive.
-			Expect(mockHelmClient.UninstalledCharts).ToNot(ContainElement("companion-a"))
-			Expect(mockHelmClient.UninstalledCharts).ToNot(ContainElement(resource.Name))
+			Expect(mockHelmClient.Uninstalled()).ToNot(ContainElement("companion-a"))
+			Expect(mockHelmClient.Uninstalled()).ToNot(ContainElement(resource.Name))
 		})
 
 		It("it must uninstall companion charts when the helm block is removed entirely", func() {
@@ -179,7 +179,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() bool {
-				return slices.Contains(mockHelmClient.InstalledCharts, "lonely-companion")
+				return slices.Contains(mockHelmClient.Installed(), "lonely-companion")
 			}, "10s", "1s").Should(BeTrue(), "Expected the companion to be installed")
 
 			// Remove the whole helm block, not just the companion entry.
@@ -193,7 +193,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			}, "10s", "1s").Should(Succeed())
 
 			Eventually(func() []string {
-				return mockHelmClient.UninstalledCharts
+				return mockHelmClient.Uninstalled()
 			}, "10s", "1s").Should(ContainElement("lonely-companion"), "Expected the orphaned companion to be uninstalled")
 		})
 
@@ -215,7 +215,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() any {
-				v, ok := mockHelmClient.ChartValues[resourceName]
+				v, ok := mockHelmClient.ValuesFor(resourceName)
 				if !ok {
 					return true
 				}
@@ -234,7 +234,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		It("it must not block reconciliation during slow helm installation", func() {
 
 			// Set up a slow mock client
-			mockHelmClient.SimulateDelay = 5 * time.Second
+			mockHelmClient.SetSimulateDelay(5 * time.Second)
 
 			resource := createKDexHost(resourceName+"-slow", kdexv1alpha1.KDexHostSpec{
 				BrandName:    "KDex Tech",
@@ -284,7 +284,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() string {
-				return mockHelmClient.ChartVersions[resource.Name]
+				return mockHelmClient.VersionFor(resource.Name)
 			}, "10s", "1s").Should(Equal("0.2.18"))
 
 			// Update the version
@@ -298,14 +298,13 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			}, "10s", "1s").Should(Succeed())
 
 			Eventually(func() string {
-				return mockHelmClient.ChartVersions[resource.Name]
+				return mockHelmClient.VersionFor(resource.Name)
 			}, "10s", "1s").Should(Equal("0.2.19"), "Expected helm chart to be upgraded to new version")
 		})
 
 		It("it must report failure when helm installation fails", func() {
 
-			mockHelmClient.FailInstall = true
-			mockHelmClient.FailMessage = "failed to pull chart"
+			mockHelmClient.SetFailInstall(true, "failed to pull chart")
 
 			resource := createKDexHost(resourceName+"-fail", kdexv1alpha1.KDexHostSpec{
 				BrandName:    "KDex Tech",
@@ -344,8 +343,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			// InstallOrUpgrade call, so presence in InstalledCharts is
 			// definitive evidence that a retry occurred after the first call
 			// returned an error.
-			mockHelmClient.FailInstallCount = 1
-			mockHelmClient.FailMessage = "transient: context deadline exceeded"
+			mockHelmClient.SetFailInstallCount(1, "transient: context deadline exceeded")
 
 			resource := createKDexHost(resourceName+"-retry", kdexv1alpha1.KDexHostSpec{
 				BrandName:    "KDex Tech",
@@ -360,10 +358,10 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			// Without changing the spec, the controller should retry on its
 			// own after the first failure and the install should succeed.
 			Eventually(func() bool {
-				return slices.Contains(mockHelmClient.InstalledCharts, resource.Name)
+				return slices.Contains(mockHelmClient.Installed(), resource.Name)
 			}, "10s", "100ms").Should(BeTrue(), "Expected helm install to be retried and succeed without a spec change")
 
-			Expect(mockHelmClient.FailInstallCount).To(Equal(0), "Expected the transient failure counter to be decremented exactly once")
+			Expect(mockHelmClient.RemainingInstallFailures()).To(Equal(0), "Expected the transient failure counter to be decremented exactly once")
 
 			// And the status attributes should reflect the recovered state.
 			Eventually(func() string {
@@ -405,12 +403,11 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
 			Eventually(func() string {
-				return mockHelmClient.ChartVersions[resource.Name]
+				return mockHelmClient.VersionFor(resource.Name)
 			}, "10s", "1s").Should(Equal("0.2.18"))
 
 			// 2. Configure mock to fail next install
-			mockHelmClient.FailInstall = true
-			mockHelmClient.FailMessage = "upgrade failed"
+			mockHelmClient.SetFailInstall(true, "upgrade failed")
 
 			// 3. Trigger upgrade
 			Eventually(func() error {
@@ -445,7 +442,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			// For now, let's just assert that the version in the mock DID NOT change to 0.2.19
 			// because the install failed.
-			Expect(mockHelmClient.ChartVersions[resource.Name]).To(Equal("0.2.18"))
+			Expect(mockHelmClient.VersionFor(resource.Name)).To(Equal("0.2.18"))
 		})
 	})
 })

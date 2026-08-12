@@ -53,6 +53,40 @@ func companionLabels(hostName string) map[string]string {
 	return map[string]string{LabelCompanionOf: hostName}
 }
 
+// SetConfiguration replaces the cluster configuration under the same lock
+// getConfiguration takes.
+//
+// r.Configuration is NOT immutable after startup, despite only ever being
+// "assigned" once: encoder.Encode calls SetGroupVersionKind, which writes the
+// object's TypeMeta. That write is why getConfiguration holds r.mu at all, and
+// it means any other writer must hold the same lock or race with an in-flight
+// encode. The race detector catches this the moment both run concurrently.
+func (r *KDexHostReconciler) SetConfiguration(config configuration.NexusConfiguration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.Configuration = config
+}
+
+// GetConfigurationCopy returns a copy of the cluster configuration taken under
+// the lock, so a caller can derive a modified configuration without reading
+// fields while an encode is writing TypeMeta.
+func (r *KDexHostReconciler) GetConfigurationCopy() configuration.NexusConfiguration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return *r.Configuration.DeepCopy()
+}
+
+// hostDefault returns a copy of the cluster-wide host defaults, taken under the
+// lock that guards the configuration.
+func (r *KDexHostReconciler) hostDefault() configuration.HostDefault {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return *r.Configuration.HostDefault.DeepCopy()
+}
+
 func (r *KDexHostReconciler) getConfiguration() ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -487,7 +521,13 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 	// per-host spec.helm.hostManager.values always wins. CoalesceTables merges at
 	// top-level-key granularity, which matches how the chart reads `resources`
 	// (whole-map `toYaml .Values.resources`).
-	if defaults := r.Configuration.HostDefault.Chart.Values; defaults != nil && len(defaults.Raw) > 0 {
+	// Read the cluster configuration once, under the lock. getConfiguration's
+	// encode writes the object's TypeMeta, so these reads are not free of a
+	// concurrent writer just because the configuration is only assigned at
+	// startup.
+	hostDefault := r.hostDefault()
+
+	if defaults := hostDefault.Chart.Values; defaults != nil && len(defaults.Raw) > 0 {
 		defaultVals, err := common.ReadValues(defaults.Raw)
 		if err != nil {
 			return nil, err
@@ -503,7 +543,6 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 		vals = util.CoalesceTables(overrideVals, vals)
 	}
 
-	hostDefault := r.Configuration.HostDefault
 	chartName := hostDefault.Chart.Name
 	version := hostDefault.Chart.Version
 

@@ -26,19 +26,17 @@ func hostWithCompanions(name string, companionNames ...string) *kdexv1alpha1.KDe
 // never seen by a spec-driven finalizer, so it outlives the CR with nothing
 // left to reference it. Discovery by owner label is what makes it reachable.
 func TestUninstallCompanionCharts_RemovesOwnedButUndeclaredRelease(t *testing.T) {
-	mock := &MockHelmClient{
-		ReleaseLabels: map[string]map[string]string{
-			"declared-companion": {LabelCompanionOf: "my-host"},
-			"ghost-companion":    {LabelCompanionOf: "my-host"},
-		},
-	}
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"declared-companion": {LabelCompanionOf: "my-host"},
+		"ghost-companion":    {LabelCompanionOf: "my-host"},
+	})
 
 	r := &KDexHostReconciler{}
 	if err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host", "declared-companion"), logr.Discard()); err != nil {
 		t.Fatalf("uninstallCompanionCharts returned error: %v", err)
 	}
 
-	got := slices.Clone(mock.UninstalledCharts)
+	got := mock.Uninstalled()
 	slices.Sort(got)
 	want := []string{"declared-companion", "ghost-companion"}
 	if !slices.Equal(got, want) {
@@ -49,28 +47,27 @@ func TestUninstallCompanionCharts_RemovesOwnedButUndeclaredRelease(t *testing.T)
 // The owner label carries the host name, so one host's teardown must not reach
 // into another host's releases that happen to share the namespace.
 func TestUninstallCompanionCharts_LeavesAnotherHostsReleases(t *testing.T) {
-	mock := &MockHelmClient{
-		ReleaseLabels: map[string]map[string]string{
-			"mine":     {LabelCompanionOf: "my-host"},
-			"theirs":   {LabelCompanionOf: "other-host"},
-			"unlabels": {},
-		},
-	}
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"mine":     {LabelCompanionOf: "my-host"},
+		"theirs":   {LabelCompanionOf: "other-host"},
+		"unlabels": {},
+	})
 
 	r := &KDexHostReconciler{}
 	if err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host"), logr.Discard()); err != nil {
 		t.Fatalf("uninstallCompanionCharts returned error: %v", err)
 	}
 
-	if !slices.Equal(mock.UninstalledCharts, []string{"mine"}) {
-		t.Errorf("uninstalled releases = %v, want [mine]", mock.UninstalledCharts)
+	if !slices.Equal(mock.Uninstalled(), []string{"mine"}) {
+		t.Errorf("uninstalled releases = %v, want [mine]", mock.Uninstalled())
 	}
 }
 
 // A listing failure must not be swallowed: reporting success while releases
 // survive is what turns a transient API error into a permanent orphan.
 func TestUninstallCompanionCharts_PropagatesListFailure(t *testing.T) {
-	mock := &MockHelmClient{FailList: true}
+	mock := NewMockHelmClient(nil)
+	mock.SetFailList(true)
 
 	r := &KDexHostReconciler{}
 	err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host", "declared-companion"), logr.Discard())
