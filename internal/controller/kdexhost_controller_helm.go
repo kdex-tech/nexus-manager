@@ -74,20 +74,46 @@ func (r *KDexHostReconciler) getConfiguration() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// computeHelmReleaseHash gates an expensive chart pull + render, so it hashes
+// what is actually sent to Helm rather than the whole KDexHost spec. Most of
+// that spec — brand, routing, theme/page/translation refs — reaches the host
+// through KDexInternalHost and never appears in the chart values, so folding it
+// in charged a full re-render for edits that could not change a rendered byte.
+//
+// The inputs are the effective host-manager ChartSpec plus the companion chart
+// declarations, which are reconciled and pruned inside the same gated pass.
+// The cluster role is already baked into the values as roleRef.name, so hashing
+// the values covers it.
+//
+// Note this does NOT narrow cluster-wide invalidation: the entire
+// NexusConfiguration is handed to every host as .Values.config, and the
+// host-manager chart renders it into a ConfigMap plus a checksum annotation, so
+// a cluster-default edit genuinely changes every host's manifest. See #27.
 func (r *KDexHostReconciler) computeHelmReleaseHash(host *kdexv1alpha1.KDexHost) (string, error) {
-	configBytes, err := r.getConfiguration()
+	spec, err := r.buildHostManagerChartSpec(host)
 	if err != nil {
 		return "", err
 	}
 
+	var companions []kdexv1alpha1.CompanionChart
+	if host.Spec.Helm != nil {
+		companions = host.Spec.Helm.CompanionCharts
+	}
+
 	inputs := struct {
-		HostSpec    kdexv1alpha1.KDexHostSpec `json:"hostSpec"`
-		Config      string                    `json:"config"`
-		ClusterRole string                    `json:"clusterRole"`
+		ReleaseName string                        `json:"releaseName"`
+		ChartName   string                        `json:"chartName"`
+		Namespace   string                        `json:"namespace"`
+		Version     string                        `json:"version"`
+		Values      map[string]any                `json:"values"`
+		Companions  []kdexv1alpha1.CompanionChart `json:"companions"`
 	}{
-		HostSpec:    host.Spec,
-		Config:      string(configBytes),
-		ClusterRole: os.Getenv("HOST_MANAGER_CLUSTER_ROLE"),
+		ReleaseName: spec.ReleaseName,
+		ChartName:   spec.ChartName,
+		Namespace:   spec.Namespace,
+		Version:     spec.Version,
+		Values:      spec.Values,
+		Companions:  companions,
 	}
 
 	b, err := json.Marshal(inputs)
@@ -423,14 +449,28 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 }
 
 func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost) error {
-	configBytes, err := r.getConfiguration()
+	spec, err := r.buildHostManagerChartSpec(host)
 	if err != nil {
 		return err
 	}
 
+	return helmClient.InstallOrUpgrade(spec)
+}
+
+// buildHostManagerChartSpec computes exactly what will be handed to Helm for
+// this host. It is the single source of truth for both the render and the
+// release hash: deriving the hash from anything else invites the drift where
+// the hash reports "unchanged" while the render would differ, which silently
+// skips a needed upgrade.
+func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHost) (*utils.ChartSpec, error) {
+	configBytes, err := r.getConfiguration()
+	if err != nil {
+		return nil, err
+	}
+
 	configVals, err := common.ReadValues(configBytes)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Shift configVals down to the "config" key which matches the chart
@@ -450,7 +490,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 	if defaults := r.Configuration.HostDefault.Chart.Values; defaults != nil && len(defaults.Raw) > 0 {
 		defaultVals, err := common.ReadValues(defaults.Raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		vals = util.CoalesceTables(vals, defaultVals)
 	}
@@ -458,7 +498,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 	if host.Spec.Helm != nil && host.Spec.Helm.HostManager != nil {
 		overrideVals, err := common.ReadValues([]byte(host.Spec.Helm.HostManager.Values))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		vals = util.CoalesceTables(overrideVals, vals)
 	}
@@ -487,7 +527,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 
 	vals["roleRef"] = roleRef
 
-	spec := &utils.ChartSpec{
+	return &utils.ChartSpec{
 		ReleaseName: host.Name,
 		ChartName:   chartName,
 		Namespace:   host.Namespace,
@@ -495,9 +535,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClie
 		Version:     version,
 		Wait:        false, // Don't block the reconciler
 		UpgradeCRDs: false,
-	}
-
-	return helmClient.InstallOrUpgrade(spec)
+	}, nil
 }
 
 func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, companion kdexv1alpha1.CompanionChart) error {
