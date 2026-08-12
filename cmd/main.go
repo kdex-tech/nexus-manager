@@ -18,8 +18,10 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"os"
+	"runtime/debug"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -46,6 +48,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/controller"
+	"github.com/kdex-tech/nexus-manager/internal/memlimit"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	// +kubebuilder:scaffold:imports
 )
@@ -71,6 +74,7 @@ func main() {
 	namedLogLevels := make(kdexlog.NamedLogLevelPairs)
 	var requeueDelaySeconds int
 	var helmRenderConcurrency int
+	var memoryLimitRatio float64
 
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -88,6 +92,11 @@ func main() {
 	flag.IntVar(&helmRenderConcurrency, "helm-render-concurrency", 1, "Maximum number of host-manager Helm renders that may run "+
 		"concurrently across the fleet. Helm renders load the chart into the operator heap, so this bounds peak render memory "+
 		"independent of fleet size. A value <= 0 means unbounded.")
+	flag.Float64Var(&memoryLimitRatio, "memory-limit-ratio", 0.9, "Fraction of the container's cgroup memory limit to "+
+		"install as Go's soft memory limit (GOMEMLIMIT), so the garbage collector applies backpressure before the kernel "+
+		"OOMKills the process. This is the last-resort safety net under the bound set by --helm-render-concurrency: "+
+		"concurrency caps how much render memory can be demanded at once, this trades GC CPU for survival when a spike "+
+		"still approaches the limit. A value <= 0 disables it, as does setting GOMEMLIMIT in the environment.")
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -117,6 +126,27 @@ func main() {
 		panic(err)
 	}
 	ctrl.SetLogger(logger)
+
+	// A render spike that OOMKills the operator can wedge a Helm release in
+	// pending-upgrade, so trade GC CPU for survival before the kernel decides.
+	limit, apply, err := memlimit.Configure("/", memoryLimitRatio, os.Getenv)
+	switch {
+	case errors.Is(err, memlimit.ErrInvalidRatio):
+		// Starting up unprotected because of a typo is the failure this flag
+		// exists to prevent, so refuse rather than log and continue.
+		setupLog.Error(err, "invalid --memory-limit-ratio")
+		os.Exit(1)
+	case apply:
+		debug.SetMemoryLimit(limit)
+		setupLog.Info("set soft memory limit", "bytes", limit, "ratio", memoryLimitRatio)
+	case err != nil:
+		setupLog.Info("leaving the soft memory limit unset", "reason", err.Error())
+	default:
+		// Either the ratio disabled us, or GOMEMLIMIT is set and the runtime
+		// already applied it. Say so, or the deferral looks like a silent skip.
+		setupLog.Info("not managing the soft memory limit",
+			"ratio", memoryLimitRatio, "GOMEMLIMIT", os.Getenv("GOMEMLIMIT"))
+	}
 
 	hostname, err := os.Hostname()
 	if err != nil {
