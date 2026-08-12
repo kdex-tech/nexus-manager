@@ -95,6 +95,18 @@ controllerManager:
     # env var takes precedence over this. Left null for the same
     # single-source-of-truth reason as above. Binary default: 0.9. See #30.
     memoryLimitRatio: null
+    # Address for the pprof endpoint, e.g. ":8082". Null (the default) disables
+    # it. DEBUGGING ONLY -- it exposes runtime internals, so it is deliberately
+    # not fronted by a Service: turn it on, reach it with
+    #   kubectl port-forward deploy/<release> 8082:8082
+    # for the duration of an investigation, then turn it back off.
+    #
+    # It exists because this operator's memory behaviour keeps being argued
+    # about from estimates. A heap profile attributes LIVE bytes to allocation
+    # sites, which is the one question container metrics and Go's runtime
+    # gauges cannot answer -- e.g. how much of the heap is the Secret informer
+    # cache. See #45.
+    pprofBindAddress: null
     extraEnv: {}
       # x-foo:
       # - name: FOO

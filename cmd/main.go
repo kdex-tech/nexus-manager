@@ -75,6 +75,7 @@ func main() {
 	var requeueDelaySeconds int
 	var helmRenderConcurrency int
 	var memoryLimitRatio float64
+	var pprofAddr string
 
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -98,6 +99,11 @@ func main() {
 		"concurrency caps how much render memory can be demanded at once, this trades GC CPU for survival when a spike "+
 		"still approaches the limit. A value <= 0 disables it, as does setting GOMEMLIMIT in the environment.")
 
+	flag.StringVar(&pprofAddr, "pprof-bind-address", "", "The address the pprof endpoint binds to (e.g. :8082). "+
+		"Empty (the default) disables it. Debugging only: this exposes runtime internals and must not be put behind a "+
+		"Service — reach it with kubectl port-forward for the duration of an investigation. Exists because this "+
+		"operator's memory profile has been argued about from estimates rather than measured; a heap profile attributes "+
+		"live bytes to allocation sites, which neither container metrics nor Go's own gauges can do.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -223,6 +229,7 @@ func main() {
 		},
 		HealthProbeBindAddress: probeAddr,
 		Metrics:                metricsServerOptions,
+		PprofBindAddress:       pprofAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "65a8acfa.kdex.dev",
 		Logger:                 logger,

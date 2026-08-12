@@ -42,6 +42,9 @@ spec:
             {{- if not (kindIs "invalid" .Values.controllerManager.container.memoryLimitRatio) }}
             - --memory-limit-ratio={{ .Values.controllerManager.container.memoryLimitRatio }}
             {{- end }}
+            {{- if not (kindIs "invalid" .Values.controllerManager.container.pprofBindAddress) }}
+            - --pprof-bind-address={{ .Values.controllerManager.container.pprofBindAddress }}
+            {{- end }}
             {{- if .Values.controllerManager.container.extraArgs }}
             {{- range $k, $v := .Values.controllerManager.container.extraArgs }}
             {{- toYaml $v | nindent 12 }}
