@@ -117,6 +117,86 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			}, "10s", "1s").Should(BeTrue(), "Expected host and companion charts to be installed")
 		})
 
+		It("it must uninstall a companion chart that is removed from the list", func() {
+
+			resource := createKDexHost(resourceName+"-prune", kdexv1alpha1.KDexHostSpec{
+				BrandName:    "KDex Tech",
+				Organization: "KDex Tech Inc.",
+				Routing: kdexv1alpha1.Routing{
+					Domains: []string{"kdex.dev"},
+				},
+				Helm: &kdexv1alpha1.HelmConfig{
+					CompanionCharts: []kdexv1alpha1.CompanionChart{
+						{Name: "companion-a", Chart: "chart-a"},
+						{Name: "companion-b", Chart: "chart-b"},
+					},
+				},
+			})
+
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			Eventually(func() bool {
+				return slices.Contains(mockHelmClient.InstalledCharts, "companion-a") &&
+					slices.Contains(mockHelmClient.InstalledCharts, "companion-b")
+			}, "10s", "1s").Should(BeTrue(), "Expected both companions to be installed")
+
+			// Drop companion-b from the list.
+			Eventually(func() error {
+				latest := &kdexv1alpha1.KDexHost{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, latest); err != nil {
+					return err
+				}
+				latest.Spec.Helm.CompanionCharts = []kdexv1alpha1.CompanionChart{
+					{Name: "companion-a", Chart: "chart-a"},
+				}
+				return k8sClient.Update(ctx, latest)
+			}, "10s", "1s").Should(Succeed())
+
+			Eventually(func() []string {
+				return mockHelmClient.UninstalledCharts
+			}, "10s", "1s").Should(ContainElement("companion-b"), "Expected the removed companion to be uninstalled")
+
+			// The still-declared companion and the host-manager release must survive.
+			Expect(mockHelmClient.UninstalledCharts).ToNot(ContainElement("companion-a"))
+			Expect(mockHelmClient.UninstalledCharts).ToNot(ContainElement(resource.Name))
+		})
+
+		It("it must uninstall companion charts when the helm block is removed entirely", func() {
+
+			resource := createKDexHost(resourceName+"-noblock", kdexv1alpha1.KDexHostSpec{
+				BrandName:    "KDex Tech",
+				Organization: "KDex Tech Inc.",
+				Routing: kdexv1alpha1.Routing{
+					Domains: []string{"kdex.dev"},
+				},
+				Helm: &kdexv1alpha1.HelmConfig{
+					CompanionCharts: []kdexv1alpha1.CompanionChart{
+						{Name: "lonely-companion", Chart: "chart-a"},
+					},
+				},
+			})
+
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+
+			Eventually(func() bool {
+				return slices.Contains(mockHelmClient.InstalledCharts, "lonely-companion")
+			}, "10s", "1s").Should(BeTrue(), "Expected the companion to be installed")
+
+			// Remove the whole helm block, not just the companion entry.
+			Eventually(func() error {
+				latest := &kdexv1alpha1.KDexHost{}
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, latest); err != nil {
+					return err
+				}
+				latest.Spec.Helm = nil
+				return k8sClient.Update(ctx, latest)
+			}, "10s", "1s").Should(Succeed())
+
+			Eventually(func() []string {
+				return mockHelmClient.UninstalledCharts
+			}, "10s", "1s").Should(ContainElement("lonely-companion"), "Expected the orphaned companion to be uninstalled")
+		})
+
 		It("it must allow overriding host-manager helm values", func() {
 
 			resource := createKDexHost(resourceName, kdexv1alpha1.KDexHostSpec{

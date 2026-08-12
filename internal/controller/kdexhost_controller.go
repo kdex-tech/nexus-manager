@@ -257,13 +257,11 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				log.Error(err, "failed to uninstall host manager release", "name", host.Name)
 			}
 
-			// Uninstall companion charts
-			if host.Spec.Helm != nil {
-				for _, companion := range host.Spec.Helm.CompanionCharts {
-					if err := c.Uninstall(companion.Name); err != nil {
-						log.Error(err, "failed to uninstall companion release", "name", companion.Name)
-					}
-				}
+			// Uninstall companion charts: everything this host owns, not only
+			// what it still declares, so a companion dropped in the same edit
+			// that deleted the host cannot outlive the CR.
+			if err := r.uninstallCompanionCharts(c, &host, log); err != nil {
+				log.Error(err, "failed to uninstall companion releases", "host", host.Name)
 			}
 
 			err = r.deleteHelmClient(host.Name, host.Namespace)

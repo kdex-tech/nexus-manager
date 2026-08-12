@@ -36,7 +36,22 @@ const (
 	HelmStatusInProgress = "in_progress"
 	HelmStatusCompleted  = "completed"
 	HelmStatusFailed     = "failed"
+
+	// LabelCompanionOf marks a Helm release as a companion chart installed by
+	// this operator on behalf of the named KDexHost. Pruning is driven by
+	// discovery through this label rather than by remembered state, so it
+	// still works after a status reset and cannot be defeated by editing the
+	// CR — the two ways a spec-only diff loses track of a release.
+	LabelCompanionOf = "kdex.dev/companion-of"
 )
+
+// companionLabels are stamped on every companion release and used as the
+// discovery selector when pruning. Helm rejects its own reserved label names
+// (name, owner, status, version, createdAt, modifiedAt); this key is namespaced
+// and collides with none of them.
+func companionLabels(hostName string) map[string]string {
+	return map[string]string{LabelCompanionOf: hostName}
+}
 
 func (r *KDexHostReconciler) getConfiguration() ([]byte, error) {
 	r.mu.Lock()
@@ -339,6 +354,15 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		}
 	}
 
+	// 3. Prune companions we own that are no longer declared. Deliberately
+	// outside the guard above: dropping the entire spec.helm block orphans
+	// every companion, which is exactly when pruning matters most. Runs after
+	// the installs so a rename (x -> y) never leaves the host with neither.
+	if err := r.pruneCompanionCharts(c, host, log); err != nil {
+		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
+		return
+	}
+
 	r.updateHelmStatus(ctx, namespace, name, hash, nil, log)
 }
 
@@ -496,7 +520,78 @@ func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClient
 		Version:     companion.Version,
 		Wait:        false,
 		UpgradeCRDs: false,
+		Labels:      companionLabels(host.Name),
 	}
 
 	return helmClient.InstallOrUpgrade(spec)
+}
+
+// pruneCompanionCharts uninstalls companion releases this operator owns for the
+// host that the host no longer declares. Converging from desired state alone
+// cannot do this: an entry removed from the list leaves no trace in the spec,
+// so the release must be rediscovered from the cluster.
+func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, log logr.Logger) error {
+	owned, err := helmClient.ListReleases(companionLabels(host.Name))
+	if err != nil {
+		return err
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+
+	declared := make(map[string]struct{})
+	if host.Spec.Helm != nil {
+		for _, companion := range host.Spec.Helm.CompanionCharts {
+			declared[companion.Name] = struct{}{}
+		}
+	}
+
+	for _, releaseName := range owned {
+		if _, stillDeclared := declared[releaseName]; stillDeclared {
+			continue
+		}
+		log.V(1).Info("pruning companion chart no longer declared", "release", releaseName, "host", host.Name)
+		if err := helmClient.Uninstall(releaseName); err != nil {
+			return fmt.Errorf("failed to prune companion chart %s: %w", releaseName, err)
+		}
+	}
+
+	return nil
+}
+
+// uninstallCompanionCharts removes every companion release belonging to the
+// host on teardown: the union of what the spec still declares and what carries
+// the host's owner label. The union matters because the two sets can differ in
+// both directions — a companion dropped in the same edit that deleted the host
+// is owned but undeclared, while one added moments ago may be declared but not
+// yet installed.
+func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, log logr.Logger) error {
+	owned, err := helmClient.ListReleases(companionLabels(host.Name))
+	if err != nil {
+		return err
+	}
+
+	seen := make(map[string]struct{}, len(owned))
+	targets := make([]string, 0, len(owned))
+	for _, releaseName := range owned {
+		seen[releaseName] = struct{}{}
+		targets = append(targets, releaseName)
+	}
+	if host.Spec.Helm != nil {
+		for _, companion := range host.Spec.Helm.CompanionCharts {
+			if _, dup := seen[companion.Name]; dup {
+				continue
+			}
+			seen[companion.Name] = struct{}{}
+			targets = append(targets, companion.Name)
+		}
+	}
+
+	for _, releaseName := range targets {
+		if err := helmClient.Uninstall(releaseName); err != nil {
+			log.Error(err, "failed to uninstall companion release", "name", releaseName)
+		}
+	}
+
+	return nil
 }

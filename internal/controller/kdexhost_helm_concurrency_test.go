@@ -42,6 +42,12 @@ func (m *concurrencyTrackingHelmClient) InstallOrUpgrade(_ *utils.ChartSpec) err
 	return nil
 }
 
+// ListReleases owns no releases: this stub exists to measure render
+// concurrency, and returning none keeps the prune pass a no-op.
+func (m *concurrencyTrackingHelmClient) ListReleases(map[string]string) ([]string, error) {
+	return nil, nil
+}
+
 // TestHelmRenderConcurrencyIsBounded verifies that no more than
 // HelmRenderConcurrency in-process Helm renders run simultaneously, regardless
 // of how many hosts dispatch renders at once. See issue #24.

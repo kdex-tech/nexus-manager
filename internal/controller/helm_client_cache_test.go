@@ -16,6 +16,8 @@ func (s *stubHelmClient) AddRepository(string, string) error      { return nil }
 func (s *stubHelmClient) InstallOrUpgrade(*utils.ChartSpec) error { return nil }
 func (s *stubHelmClient) Uninstall(string) error                  { return nil }
 
+func (s *stubHelmClient) ListReleases(map[string]string) ([]string, error) { return nil, nil }
+
 func secretsWithPassword(pw string) kdexv1alpha1.Secrets {
 	return kdexv1alpha1.Secrets{
 		{

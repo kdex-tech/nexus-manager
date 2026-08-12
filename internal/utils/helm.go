@@ -17,8 +17,10 @@ import (
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
+	"helm.sh/helm/v4/pkg/release"
 	v1 "helm.sh/helm/v4/pkg/repo/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
@@ -36,12 +38,17 @@ type ChartSpec struct {
 	Version     string
 	Wait        bool
 	UpgradeCRDs bool
+	// Labels are custom labels stamped on the Helm release. Helm persists
+	// them on the release's storage Secret and merges them on upgrade, so
+	// they survive as a durable, queryable ownership marker.
+	Labels map[string]string
 }
 
 // HelmClientInterface defines the operations for Helm management.
 type HelmClientInterface interface {
 	AddRepository(name, repo string) error
 	InstallOrUpgrade(spec *ChartSpec) error
+	ListReleases(matchLabels map[string]string) ([]string, error)
 	Uninstall(releaseName string) error
 }
 
@@ -169,6 +176,31 @@ func (h *HelmClient) ShowChart(spec *ChartSpec) (string, error) {
 	}
 
 	return client.Run(cp)
+}
+
+// ListReleases returns the names of releases in this client's namespace that
+// carry every one of matchLabels. Releases in any state are returned — a
+// release wedged in pending-upgrade is still one we own and must be able to
+// clean up.
+func (h *HelmClient) ListReleases(matchLabels map[string]string) ([]string, error) {
+	client := action.NewList(h.actionConfig)
+	client.StateMask = action.ListAll
+	client.Selector = labels.Set(matchLabels).String()
+
+	releases, err := client.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list releases: %w", err)
+	}
+
+	names := make([]string, 0, len(releases))
+	for _, rel := range releases {
+		accessor, err := release.NewAccessor(rel)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read release: %w", err)
+		}
+		names = append(names, accessor.Name())
+	}
+	return names, nil
 }
 
 // Uninstall uninstalls a Helm release.
@@ -307,6 +339,7 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 	client.SkipCRDs = !spec.UpgradeCRDs
 	client.WaitStrategy = "legacy"
 	client.Timeout = 5 * time.Minute
+	client.Labels = spec.Labels
 
 	if spec.Version != "" {
 		client.Version = spec.Version
@@ -340,6 +373,7 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 	client.SkipCRDs = !spec.UpgradeCRDs
 	client.WaitStrategy = "legacy"
 	client.Timeout = 5 * time.Minute
+	client.Labels = spec.Labels
 
 	if spec.Version != "" {
 		client.Version = spec.Version
