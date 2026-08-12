@@ -193,6 +193,26 @@ func (r *KDexHostReconciler) clearHelmOperationActive(key types.NamespacedName, 
 	}
 }
 
+// cancelHelmOperation cancels and forgets any in-flight Helm operation for the
+// host. Called on teardown so a render still queued behind the fleet cannot
+// wake up after the CR is gone and re-install what deletion just removed. The
+// cancel only unblocks a goroutine parked in acquireHelmRenderSlot -- Helm's
+// own calls take no context -- so runAsyncHelmReconcile re-checks the host
+// after it acquires a slot rather than relying on this alone.
+func (r *KDexHostReconciler) cancelHelmOperation(key types.NamespacedName) {
+	r.mu.Lock()
+	op, active := r.activeHelmOperations[key]
+	if active {
+		delete(r.activeHelmOperations, key)
+	}
+	r.mu.Unlock()
+
+	// Outside the lock: cancel() may synchronously run work that needs it.
+	if active {
+		op.cancel()
+	}
+}
+
 func (r *KDexHostReconciler) isHelmOperationActive(key types.NamespacedName, hash string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -387,6 +407,28 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		return
 	}
 	defer release()
+
+	// Re-read the host now that the slot is held. The wait above can last
+	// minutes on a serialized fleet, and the snapshot taken before it says
+	// nothing about what is still true: the host may have been deleted and
+	// fully finalized in the meantime. Proceeding on the stale copy would
+	// re-create the Helm client that deletion just removed and re-install the
+	// release plus every companion the stale spec declares -- releases that
+	// then run with no CR left in the cluster referencing them, invisible to
+	// the prune because the stale spec still declares them.
+	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, host); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to re-read host after acquiring a render slot", "namespace", namespace, "name", name)
+		}
+		log.V(2).Info("host is gone; abandoning queued helm render", "namespace", namespace, "name", name)
+		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
+		return
+	}
+	if !host.DeletionTimestamp.IsZero() {
+		log.V(2).Info("host is terminating; abandoning queued helm render", "namespace", namespace, "name", name)
+		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
+		return
+	}
 
 	c, err := r.getOrCreateHelmClient(
 		host.Name,

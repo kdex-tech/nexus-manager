@@ -260,6 +260,10 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// left in the cluster that references them. Requeue instead and let
 			// the next pass retry -- uninstall is idempotent, and Helm purges an
 			// already-uninstalled release without error.
+			// Stop any render still queued for this host before tearing its
+			// releases down, so it cannot re-install them afterwards.
+			r.cancelHelmOperation(req.NamespacedName)
+
 			var uninstallErrs []error
 
 			// Uninstall host manager chart
