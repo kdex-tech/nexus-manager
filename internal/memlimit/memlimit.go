@@ -90,6 +90,11 @@ func readCgroupLimit(root string) (int64, error) {
 	if limit >= unlimitedV1 {
 		return 0, ErrNoLimit
 	}
+	// A zero or negative limit is not a limit we can derive headroom from, and
+	// installing it would be a permanent GC death spiral rather than a no-op.
+	if limit <= 0 {
+		return 0, ErrNoLimit
+	}
 
 	return limit, nil
 }

@@ -188,6 +188,20 @@ func TestFromCgroup_NoCgroupReportsNoLimit(t *testing.T) {
 	}
 }
 
+// A zero limit parses cleanly and scales cleanly to zero, so without a lower
+// guard it reaches debug.SetMemoryLimit(0) -- a permanent GC death spiral
+// rather than the no-op every other "nothing to derive" case produces.
+func TestFromCgroup_ZeroLimitReportsNoLimit(t *testing.T) {
+	root := t.TempDir()
+	writeCgroupV2(t, root, "0\n")
+
+	_, err := FromCgroup(root, 0.9)
+
+	if !errors.Is(err, ErrNoLimit) {
+		t.Errorf("got err %v, want ErrNoLimit", err)
+	}
+}
+
 // cgroup v1 has no "max" spelling: an unlimited controller reports
 // PAGE_COUNTER_MAX, a number so large it parses cleanly and scales cleanly.
 // Without an explicit guard the operator would announce a ~8 EiB soft limit and
