@@ -32,6 +32,16 @@ spec:
             {{- range .Values.controllerManager.container.args }}
             - {{ . }}
             {{- end }}
+            {{- /* Emitted only when set, so an explicit null defers to the
+                   binary's own default. A `default` pipeline could not do this:
+                   0 is a meaningful value here (unbounded) and `default` would
+                   silently rewrite it to the fallback. */}}
+            {{- if not (kindIs "invalid" .Values.controllerManager.container.helmRenderConcurrency) }}
+            - --helm-render-concurrency={{ .Values.controllerManager.container.helmRenderConcurrency }}
+            {{- end }}
+            {{- if not (kindIs "invalid" .Values.controllerManager.container.memoryLimitRatio) }}
+            - --memory-limit-ratio={{ .Values.controllerManager.container.memoryLimitRatio }}
+            {{- end }}
             {{- if .Values.controllerManager.container.extraArgs }}
             {{- range $k, $v := .Values.controllerManager.container.extraArgs }}
             {{- toYaml $v | nindent 12 }}

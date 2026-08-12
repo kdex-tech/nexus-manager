@@ -67,6 +67,30 @@ controllerManager:
     extraArgs: {}
       # x-foo:
       # - "--zap-log-level=info"
+    # Maximum host-manager Helm renders allowed to run at once, fleet-wide.
+    # This is the memory/throughput trade-off: each render decompresses a whole
+    # chart onto the operator heap, so peak memory scales with THIS number, not
+    # with the number of hosts -- while convergence time scales inversely. At 1
+    # (the default) peak heap stays flat no matter how large the fleet grows,
+    # but hosts converge strictly one after another.
+    #
+    # Raise it deliberately, together with resources.limits.memory below. The
+    # chart cache (#26) removed the repeated DOWNLOAD, not the per-render heap:
+    # every concurrent render still gets its own decompressed copy, because
+    # sharing one would let one host's values change what another renders. So N
+    # concurrent renders still cost roughly N chart loads of peak memory.
+    # memoryLimitRatio is the safety net under this bound, not a substitute for
+    # sizing it: it converts an overshoot into GC pressure instead of an
+    # OOMKill, which is slow-but-alive rather than a release wedged in
+    # pending-upgrade.
+    #
+    # 0 or less means unbounded. Set to null to defer to the binary's default.
+    helmRenderConcurrency: 1
+    # Fraction of the container's cgroup memory limit installed as Go's soft
+    # memory limit (GOMEMLIMIT), so the GC applies backpressure before the
+    # kernel OOMKills the operator. 0 or less disables it; setting a GOMEMLIMIT
+    # env var takes precedence over this. See #30.
+    memoryLimitRatio: 0.9
     extraEnv: {}
       # x-foo:
       # - name: FOO
