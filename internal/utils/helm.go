@@ -203,6 +203,15 @@ func (h *HelmClient) ListReleases(matchLabels map[string]string) ([]string, erro
 	return names, nil
 }
 
+// locateChart resolves the chart archive's path, reusing a fleet-shared cache
+// so the same artifact is not re-downloaded once per host. The key includes a
+// hash of this client's resolved secrets so a cached archive is never reused
+// across a credential boundary.
+func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (string, error) {
+	key := chartPathKey(spec.ChartName, spec.Version, Hash(h.secrets))
+	return sharedChartPaths.get(key, load)
+}
+
 // Uninstall uninstalls a Helm release.
 func (h *HelmClient) Uninstall(releaseName string) error {
 	client := action.NewUninstall(h.actionConfig)
@@ -345,8 +354,13 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 		client.Version = spec.Version
 	}
 
-	// Locate the chart
-	cp, err := client.LocateChart(spec.ChartName, h.settings)
+	// Locate the chart. LocateChart re-downloads the archive on every call, and
+	// the chart is identical across hosts, so the located path is cached and
+	// shared fleet-wide. loader.Load still runs per render: Helm mutates the
+	// chart while rendering, so each render needs its own copy.
+	cp, err := h.locateChart(spec, func() (string, error) {
+		return client.LocateChart(spec.ChartName, h.settings)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to locate chart %s: %w", spec.ChartName, err)
 	}
@@ -379,8 +393,13 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 		client.Version = spec.Version
 	}
 
-	// Locate the chart
-	cp, err := client.LocateChart(spec.ChartName, h.settings)
+	// Locate the chart. LocateChart re-downloads the archive on every call, and
+	// the chart is identical across hosts, so the located path is cached and
+	// shared fleet-wide. loader.Load still runs per render: Helm mutates the
+	// chart while rendering, so each render needs its own copy.
+	cp, err := h.locateChart(spec, func() (string, error) {
+		return client.LocateChart(spec.ChartName, h.settings)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to locate chart %s: %w", spec.ChartName, err)
 	}
