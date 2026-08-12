@@ -87,13 +87,24 @@ controllerManager:
         port: 8081
       initialDelaySeconds: 5
       periodSeconds: 10
+    # Manager pod resources. Sized for the in-process Helm render:
+    # reconcileHelmReleases loads and decompresses each host's host-manager
+    # chart onto the operator heap via the embedded Helm SDK, so the spike is
+    # hundreds of MiB above the ~200Mi steady state. The previous 128Mi default
+    # OOMKilled the operator mid-`helm upgrade` on a two-host fleet, and 512Mi
+    # OOMKilled it again -- an OOM there wedges the release in pending-upgrade
+    # until its orphaned revision Secret is deleted by hand. See #40.
+    #
+    # The 256Mi request also lowers the pod's oom_score_adj, making it a less
+    # likely victim under genuine node pressure. CPU request stays at 10m so
+    # this does not inflate a tight system pool's CPU-request budget.
     resources:
       limits:
         cpu: 500m
-        memory: 128Mi
+        memory: 1Gi
       requests:
         cpu: 10m
-        memory: 64Mi
+        memory: 256Mi
     securityContext:
       allowPrivilegeEscalation: false
       capabilities:
