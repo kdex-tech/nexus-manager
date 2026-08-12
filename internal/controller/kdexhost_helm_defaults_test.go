@@ -50,9 +50,11 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 		})
 
 		It("applies the default top-level values when the host does not override them", func() {
-			hostReconciler.Configuration.HostDefault.Chart.Values = &runtime.RawExtension{
-				Raw: []byte(`{"resources":{"requests":{"memory":"256Mi"}}}`),
-			}
+			mutateConfiguration(func(c *configuration.NexusConfiguration) {
+				c.HostDefault.Chart.Values = &runtime.RawExtension{
+					Raw: []byte(`{"resources":{"requests":{"memory":"256Mi"}}}`),
+				}
+			})
 
 			resource := &kdexv1alpha1.KDexHost{
 				ObjectMeta: metav1.ObjectMeta{Name: "defaults-host", Namespace: testNamespace},
@@ -70,9 +72,11 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 		})
 
 		It("lets a per-host value win over the cluster default", func() {
-			hostReconciler.Configuration.HostDefault.Chart.Values = &runtime.RawExtension{
-				Raw: []byte(`{"resources":{"requests":{"memory":"256Mi"}}}`),
-			}
+			mutateConfiguration(func(c *configuration.NexusConfiguration) {
+				c.HostDefault.Chart.Values = &runtime.RawExtension{
+					Raw: []byte(`{"resources":{"requests":{"memory":"256Mi"}}}`),
+				}
+			})
 
 			resource := &kdexv1alpha1.KDexHost{
 				ObjectMeta: metav1.ObjectMeta{Name: "override-host", Namespace: testNamespace},
@@ -122,9 +126,21 @@ type configurationSnapshot struct {
 }
 
 func snapshotConfiguration() *configurationSnapshot {
-	return &configurationSnapshot{config: hostReconciler.Configuration.DeepCopy()}
+	c := hostReconciler.GetConfigurationCopy()
+	return &configurationSnapshot{config: &c}
 }
 
 func (s *configurationSnapshot) restore() {
-	hostReconciler.Configuration = *s.config
+	hostReconciler.SetConfiguration(*s.config)
+}
+
+// mutateConfiguration read-modify-writes the shared reconciler's configuration
+// under its lock. The envtest manager is running while these specs execute, so
+// reconciles are concurrently encoding that same object -- and the encode WRITES
+// its TypeMeta (SetGroupVersionKind), so an unguarded assignment here is a real
+// race, not a theoretical one. It is what broke the v0.4.0 tag build.
+func mutateConfiguration(fn func(*configuration.NexusConfiguration)) {
+	c := hostReconciler.GetConfigurationCopy()
+	fn(&c)
+	hostReconciler.SetConfiguration(c)
 }

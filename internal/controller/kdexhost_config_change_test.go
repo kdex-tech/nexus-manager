@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"kdex.dev/crds/configuration"
 )
 
 var _ = Describe("KDexHost Configuration Change Integration", func() {
@@ -51,7 +52,9 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 		It("must upgrade the host-manager helm chart when the global default version changes", func() {
 			// 1. Set initial global default version
 			originalConfig := hostReconciler.GetConfigurationCopy()
-			hostReconciler.Configuration.HostDefault.Chart.Version = "1.0.0"
+			mutateConfiguration(func(c *configuration.NexusConfiguration) {
+				c.HostDefault.Chart.Version = "1.0.0"
+			})
 
 			resource := &kdexv1alpha1.KDexHost{
 				ObjectMeta: metav1.ObjectMeta{
@@ -75,9 +78,9 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 			}, "10s", "500ms").Should(Equal("1.0.0"))
 
 			// 3. Update the global configuration version
-			updated := hostReconciler.GetConfigurationCopy()
-			updated.HostDefault.Chart.Version = "1.1.0"
-			hostReconciler.SetConfiguration(updated)
+			mutateConfiguration(func(c *configuration.NexusConfiguration) {
+				c.HostDefault.Chart.Version = "1.1.0"
+			})
 
 			// 4. Trigger a reconciliation by updating an annotation (does NOT bump generation)
 			Eventually(func() error {
