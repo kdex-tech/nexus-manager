@@ -124,3 +124,116 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		t.Fatalf("rendered %d hosts, want %d", got, numHosts)
 	}
 }
+
+// pruneTrackingHelmClient renders instantly but dwells inside Uninstall, so a
+// test can observe whether renders proceed while a prune is in flight.
+type pruneTrackingHelmClient struct {
+	utils.HelmClientInterface
+	pruneDwell time.Duration
+
+	pruning atomic.Int32
+	// rendersDuringPrune counts renders that began while some other host's
+	// prune was still running -- the property the early slot release buys.
+	rendersDuringPrune atomic.Int32
+	renders            atomic.Int32
+}
+
+func (m *pruneTrackingHelmClient) InstallOrUpgrade(_ *utils.ChartSpec) error {
+	if m.pruning.Load() > 0 {
+		m.rendersDuringPrune.Add(1)
+	}
+	m.renders.Add(1)
+	return nil
+}
+
+// One owned release, never declared by any host, so every prune uninstalls it.
+func (m *pruneTrackingHelmClient) ListReleases(map[string]string) ([]string, error) {
+	return []string{"orphaned-companion"}, nil
+}
+
+func (m *pruneTrackingHelmClient) Uninstall(string) error {
+	m.pruning.Add(1)
+	time.Sleep(m.pruneDwell)
+	m.pruning.Add(-1)
+	return nil
+}
+
+// The render slot bounds MEMORY -- concurrent chart loads. A prune loads no
+// chart; it lists releases and uninstalls, and each uninstall waits on
+// foreground deletion for up to five minutes. Holding the slot across that lets
+// one companion blocked by a finalizer stall every other host's render, which
+// is the failure the slot exists to prevent rather than cause.
+//
+// With a single slot, a render can only overlap another host's prune if the
+// slot was released before that prune began.
+func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
+	const numHosts = 4
+
+	scheme := runtime.NewScheme()
+	if err := kdexv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add kdex scheme: %v", err)
+	}
+	if err := configuration.AddToScheme(scheme); err != nil {
+		t.Fatalf("add configuration scheme: %v", err)
+	}
+
+	objs := make([]client.Object, 0, numHosts)
+	for i := range numHosts {
+		objs = append(objs, &kdexv1alpha1.KDexHost{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("host-%d", i),
+				Namespace: "default",
+			},
+			Spec: kdexv1alpha1.KDexHostSpec{
+				BrandName:    "KDex Tech",
+				Organization: "KDex Tech Inc.",
+				ModulePolicy: kdexv1alpha1.LooseModulePolicy,
+			},
+		})
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
+		Build()
+
+	mock := &pruneTrackingHelmClient{pruneDwell: 60 * time.Millisecond}
+
+	r := &KDexHostReconciler{
+		Client:                fc,
+		ControllerID:          "test",
+		Ctx:                   context.Background(),
+		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
+		Scheme:                scheme,
+		HelmRenderConcurrency: 1,
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+			return mock, nil
+		},
+	}
+
+	var wg sync.WaitGroup
+	for i := range numHosts {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			r.runAsyncHelmReconcile(
+				context.Background(),
+				"default",
+				fmt.Sprintf("host-%d", n),
+				"hash",
+				nil,
+				logr.Discard(),
+			)
+		}(i)
+	}
+	wg.Wait()
+
+	if got := mock.renders.Load(); got != int32(numHosts) {
+		t.Fatalf("rendered %d hosts, want %d", got, numHosts)
+	}
+	if mock.rendersDuringPrune.Load() == 0 {
+		t.Error("no render overlapped a prune: the render slot is being held across the prune, " +
+			"so one stuck uninstall stalls the whole fleet")
+	}
+}

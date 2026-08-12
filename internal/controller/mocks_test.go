@@ -34,7 +34,7 @@ type MockHelmClient struct {
 	// and read back by List for selector matching. Keyed by release name.
 	releaseLabels map[string]map[string]string
 
-	failList      bool
+	failList bool
 	// failUninstall names releases whose Uninstall returns an error.
 	failUninstall map[string]struct{}
 	simulateDelay time.Duration

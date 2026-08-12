@@ -41,7 +41,6 @@ type ChartSpec struct {
 	Namespace   string
 	Values      map[string]any
 	Version     string
-	Wait        bool
 	UpgradeCRDs bool
 	// Labels are custom labels stamped on the Helm release. Helm persists
 	// them on the release's storage Secret and merges them on upgrade, so
@@ -351,7 +350,23 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 	client.Namespace = spec.Namespace
 	client.CreateNamespace = false
 	client.SkipCRDs = !spec.UpgradeCRDs
-	client.WaitStrategy = "legacy"
+	// HookOnly, not a full rollout wait. The wait is taken while holding the
+	// fleet-wide render slot, and that slot exists to bound MEMORY (concurrent
+	// chart loads) -- charging a minutes-long wait against it prices a parked
+	// goroutine as if it were an active render, and serializes the whole fleet
+	// behind one slow rollout.
+	//
+	// Nothing is lost by not waiting here: the reconciler already observes the
+	// host-manager Deployment and drives Progressing/Ready/Degraded from
+	// DeploymentAvailable (kdexhost_controller.go, readiness check 2). That
+	// check is level-triggered and has no deadline, so it is strictly better
+	// than this wait was -- a rollout healthy at six minutes was reported as a
+	// FAILURE by the 5-minute wait while the watch reports it correctly.
+	//
+	// Hooks are still waited on, and a failed apply (invalid manifest, quota,
+	// failed hook) still errors from Run. Only "did the pods become ready"
+	// moves, and it moves to the mechanism that already owned it.
+	client.WaitStrategy = kube.HookOnlyStrategy
 	client.Timeout = 5 * time.Minute
 	client.Labels = spec.Labels
 
@@ -390,7 +405,23 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 	client := action.NewUpgrade(h.actionConfig)
 	client.Namespace = spec.Namespace
 	client.SkipCRDs = !spec.UpgradeCRDs
-	client.WaitStrategy = "legacy"
+	// HookOnly, not a full rollout wait. The wait is taken while holding the
+	// fleet-wide render slot, and that slot exists to bound MEMORY (concurrent
+	// chart loads) -- charging a minutes-long wait against it prices a parked
+	// goroutine as if it were an active render, and serializes the whole fleet
+	// behind one slow rollout.
+	//
+	// Nothing is lost by not waiting here: the reconciler already observes the
+	// host-manager Deployment and drives Progressing/Ready/Degraded from
+	// DeploymentAvailable (kdexhost_controller.go, readiness check 2). That
+	// check is level-triggered and has no deadline, so it is strictly better
+	// than this wait was -- a rollout healthy at six minutes was reported as a
+	// FAILURE by the 5-minute wait while the watch reports it correctly.
+	//
+	// Hooks are still waited on, and a failed apply (invalid manifest, quota,
+	// failed hook) still errors from Run. Only "did the pods become ready"
+	// moves, and it moves to the mechanism that already owned it.
+	client.WaitStrategy = kube.HookOnlyStrategy
 	client.Timeout = 5 * time.Minute
 	client.Labels = spec.Labels
 	// The Helm SDK default is UNLIMITED history -- `--history-max=10` is a CLI

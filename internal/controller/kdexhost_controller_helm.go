@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -366,7 +367,12 @@ func (r *KDexHostReconciler) acquireHelmRenderSlot(ctx context.Context) (func(),
 
 	select {
 	case r.helmRenderSem <- struct{}{}:
-		return func() { <-r.helmRenderSem }, true
+		// Idempotent so the caller can release early -- once the renders are
+		// done and only deletions remain -- while still deferring it for the
+		// error paths. Draining the channel twice would hand out a slot that
+		// was never taken.
+		var once sync.Once
+		return func() { once.Do(func() { <-r.helmRenderSem }) }, true
 	case <-ctx.Done():
 		return func() {}, false
 	}
@@ -456,6 +462,14 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 			}
 		}
 	}
+
+	// Every chart load is done, so give the render slot back before the prune.
+	// The prune loads no chart -- it lists releases and uninstalls -- but each
+	// uninstall waits on foreground deletion for up to 5 minutes. Holding a
+	// MEMORY bound across that would let one companion blocked by a finalizer
+	// stall every other host's render, which is the whole failure this slot is
+	// supposed to prevent rather than cause.
+	release()
 
 	// 3. Prune companions we own that are no longer declared. Deliberately
 	// outside the guard above: dropping the entire spec.helm block orphans
@@ -615,7 +629,6 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 		Namespace:   host.Namespace,
 		Values:      vals,
 		Version:     version,
-		Wait:        false, // Don't block the reconciler
 		UpgradeCRDs: false,
 	}, nil
 }
@@ -638,7 +651,6 @@ func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClient
 		Namespace:   host.Namespace,
 		Values:      vals,
 		Version:     companion.Version,
-		Wait:        false,
 		UpgradeCRDs: false,
 		Labels:      companionLabels(host.Name),
 	}
