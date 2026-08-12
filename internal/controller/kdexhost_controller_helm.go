@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,7 +15,7 @@ import (
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	"helm.sh/helm/v4/pkg/chart/common"
 	"helm.sh/helm/v4/pkg/chart/common/util"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -475,7 +476,7 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
 
 	if patchErr := r.Status().Patch(ctx, host, patch); patchErr != nil {
-		if !errors.IsNotFound(patchErr) && !errors.IsConflict(patchErr) {
+		if !apierrors.IsNotFound(patchErr) && !apierrors.IsConflict(patchErr) {
 			log.Error(patchErr, "failed to patch status")
 		}
 		log.V(2).Info("updateHelmStatus", "patchErr", patchErr)
@@ -664,11 +665,18 @@ func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClien
 		}
 	}
 
+	// Every target is attempted before returning: one companion blocked by a
+	// finalizer must not strand the rest. The failures are joined and returned
+	// rather than logged, because the caller removes the host finalizer on a nil
+	// error -- reporting success while releases survive is what turns a
+	// transient failure into a permanent orphan.
+	var errs []error
 	for _, releaseName := range targets {
 		if err := helmClient.Uninstall(releaseName); err != nil {
 			log.Error(err, "failed to uninstall companion release", "name", releaseName)
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }

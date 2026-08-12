@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -30,7 +31,7 @@ import (
 	nexuswebhook "github.com/kdex-tech/nexus-manager/internal/webhook"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -108,13 +109,13 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// Defer status update
 	defer func() {
 		// If the object was not found, we don't need to update status
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return
 		}
 
 		latestHost := &kdexv1alpha1.KDexHost{}
 		if getErr := r.Get(ctx, req.NamespacedName, latestHost); getErr != nil {
-			if !errors.IsNotFound(getErr) {
+			if !apierrors.IsNotFound(getErr) {
 				log.Error(getErr, "failed to get latest host for status update")
 			}
 			return
@@ -156,9 +157,9 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		latestHost.Status.ObservedGeneration = host.Generation
 
 		if updateErr := r.Status().Patch(ctx, latestHost, patch); updateErr != nil {
-			if errors.IsConflict(updateErr) {
+			if apierrors.IsConflict(updateErr) {
 				res = ctrl.Result{RequeueAfter: 50 * time.Millisecond}
-			} else if !errors.IsNotFound(updateErr) {
+			} else if !apierrors.IsNotFound(updateErr) {
 				log.Error(updateErr, "failed to patch status")
 				err = updateErr
 				res = ctrl.Result{}
@@ -204,7 +205,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				// KDexInternalHost still exists. We wait.
 				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
-			if !errors.IsNotFound(err) {
+			if !apierrors.IsNotFound(err) {
 				return ctrl.Result{}, err
 			}
 
@@ -252,9 +253,19 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				return ctrl.Result{}, err
 			}
 
+			// Both uninstalls are attempted before any failure is acted on, so
+			// one blocked release does not strand the others. But a failure
+			// MUST keep the finalizer: releasing it here would delete the CR
+			// while its releases are still running, leaving them with nothing
+			// left in the cluster that references them. Requeue instead and let
+			// the next pass retry -- uninstall is idempotent, and Helm purges an
+			// already-uninstalled release without error.
+			var uninstallErrs []error
+
 			// Uninstall host manager chart
 			if err := c.Uninstall(host.Name); err != nil {
 				log.Error(err, "failed to uninstall host manager release", "name", host.Name)
+				uninstallErrs = append(uninstallErrs, err)
 			}
 
 			// Uninstall companion charts: everything this host owns, not only
@@ -262,6 +273,11 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// that deleted the host cannot outlive the CR.
 			if err := r.uninstallCompanionCharts(c, &host, log); err != nil {
 				log.Error(err, "failed to uninstall companion releases", "host", host.Name)
+				uninstallErrs = append(uninstallErrs, err)
+			}
+
+			if err := errors.Join(uninstallErrs...); err != nil {
+				return ctrl.Result{}, err
 			}
 
 			err = r.deleteHelmClient(host.Name, host.Namespace)
@@ -470,7 +486,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	deployment := &appsv1.Deployment{}
 	err = r.Get(ctx, req.NamespacedName, deployment)
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			kdexv1alpha1.SetConditions(
 				&host.Status.Conditions,
 				kdexv1alpha1.ConditionStatuses{

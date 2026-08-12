@@ -35,6 +35,8 @@ type MockHelmClient struct {
 	releaseLabels map[string]map[string]string
 
 	failList      bool
+	// failUninstall names releases whose Uninstall returns an error.
+	failUninstall map[string]struct{}
 	simulateDelay time.Duration
 	failInstall   bool
 	// failInstallCount makes the next N calls fail and then succeed.
@@ -105,6 +107,13 @@ func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 func (m *MockHelmClient) Uninstall(releaseName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, fails := m.failUninstall[releaseName]; fails {
+		// Models a real uninstall failure: Helm uses foreground propagation
+		// with a 5-minute timeout, so a resource held by a finalizer makes the
+		// call return an error with the release still present.
+		return fmt.Errorf("failed to uninstall release %s: timed out waiting for deletion", releaseName)
+	}
 
 	m.uninstalledCharts = append(m.uninstalledCharts, releaseName)
 	delete(m.releaseLabels, releaseName)
@@ -197,6 +206,19 @@ func (m *MockHelmClient) RemainingInstallFailures() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.failInstallCount
+}
+
+// SetFailUninstall makes Uninstall fail for the named releases, modelling a
+// release whose teardown is blocked (e.g. a PVC held by a terminating pod).
+func (m *MockHelmClient) SetFailUninstall(releaseNames ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failUninstall == nil {
+		m.failUninstall = make(map[string]struct{}, len(releaseNames))
+	}
+	for _, n := range releaseNames {
+		m.failUninstall[n] = struct{}{}
+	}
 }
 
 func (m *MockHelmClient) SetFailList(fail bool) {

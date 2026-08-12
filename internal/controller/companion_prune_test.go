@@ -2,6 +2,7 @@ package controller
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -73,5 +74,32 @@ func TestUninstallCompanionCharts_PropagatesListFailure(t *testing.T) {
 	err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host", "declared-companion"), logr.Discard())
 	if err == nil {
 		t.Fatal("expected an error when listing releases fails, got nil")
+	}
+}
+
+// Teardown must not report success while releases survive. Swallowing the
+// error and removing the finalizer anyway leaves the releases running with no
+// CR left to reference them -- the same permanent orphan #36 exists to prevent,
+// arrived at from the deletion path instead.
+func TestUninstallCompanionCharts_PropagatesUninstallFailure(t *testing.T) {
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"healthy": {LabelCompanionOf: "my-host"},
+		"stuck":   {LabelCompanionOf: "my-host"},
+	})
+	mock.SetFailUninstall("stuck")
+
+	r := &KDexHostReconciler{}
+	err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host"), logr.Discard())
+
+	if err == nil {
+		t.Fatal("expected an error when a companion uninstall fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "stuck") {
+		t.Errorf("error %q does not name the release that failed", err)
+	}
+	// The other release must still have been attempted: one stuck companion
+	// cannot be allowed to strand the rest.
+	if !slices.Contains(mock.Uninstalled(), "healthy") {
+		t.Errorf("uninstalled = %v, want it to still include healthy", mock.Uninstalled())
 	}
 }
