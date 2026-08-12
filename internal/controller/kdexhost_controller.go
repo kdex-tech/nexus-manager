@@ -281,6 +281,21 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			}
 
 			if err := errors.Join(uninstallErrs...); err != nil {
+				// Keeping the finalizer is correct, but it leaves the host in
+				// Terminating with no visible reason -- and a terminating
+				// object is exactly when an operator has the fewest places to
+				// look. Put the cause on the CR so `kubectl describe` explains
+				// the wait, and says which release to unblock.
+				kdexv1alpha1.SetConditions(
+					&host.Status.Conditions,
+					kdexv1alpha1.ConditionStatuses{
+						Degraded:    metav1.ConditionTrue,
+						Progressing: metav1.ConditionFalse,
+						Ready:       metav1.ConditionFalse,
+					},
+					kdexv1alpha1.ConditionReasonReconcileError,
+					fmt.Sprintf("Deletion is blocked: %v. The finalizer is held until every release is gone.", err),
+				)
 				return ctrl.Result{}, err
 			}
 
