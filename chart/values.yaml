@@ -84,13 +84,17 @@ controllerManager:
     # OOMKill, which is slow-but-alive rather than a release wedged in
     # pending-upgrade.
     #
-    # 0 or less means unbounded. Set to null to defer to the binary's default.
-    helmRenderConcurrency: 1
+    # 0 or less means unbounded. Left null so the binary's own default is the
+    # single source of truth -- pinning the number here too would mean a future
+    # change to the Go default passes CI and changes nothing in production.
+    # Set a number to override. Binary default: 1.
+    helmRenderConcurrency: null
     # Fraction of the container's cgroup memory limit installed as Go's soft
     # memory limit (GOMEMLIMIT), so the GC applies backpressure before the
     # kernel OOMKills the operator. 0 or less disables it; setting a GOMEMLIMIT
-    # env var takes precedence over this. See #30.
-    memoryLimitRatio: 0.9
+    # env var takes precedence over this. Left null for the same
+    # single-source-of-truth reason as above. Binary default: 0.9. See #30.
+    memoryLimitRatio: null
     extraEnv: {}
       # x-foo:
       # - name: FOO
