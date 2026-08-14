@@ -224,6 +224,7 @@ func main() {
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Cache: controller.CacheOptions(),
 		Controller: config.Controller{
 			Logger: logger,
 		},

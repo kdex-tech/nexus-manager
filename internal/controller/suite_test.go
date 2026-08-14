@@ -175,6 +175,7 @@ var _ = BeforeSuite(func() {
 	Expect(k8sClient.Create(ctx, ns2)).To(Succeed())
 
 	k8sManager, err := manager.New(cfg, manager.Options{
+		Cache: CacheOptions(),
 		Controller: config.Controller{
 			Logger: logger,
 		},
