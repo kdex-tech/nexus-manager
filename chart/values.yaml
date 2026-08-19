@@ -24,11 +24,18 @@ config:
   packages:
     packagerImage: ghcr.io/kdex-tech/cli-tools:0.3.19
     packagerImagePullPolicy: IfNotPresent
-    # 0.4.0 adds a verification ledger on the packages cache claim. It is a
-    # no-op while packages.cacheClaim is unset below — no claim means no ledger
-    # and the cold verify path every Job, exactly as 0.3.3 behaved — so this
-    # bump is behaviour-preserving until that claim is configured.
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.4.0
+    # 0.4.0 adds a verification ledger on the packages cache claim; 0.4.1 makes
+    # the ledger's state self-reporting and reads the registry directly instead
+    # of shelling out to the npm CLI (kdex-tech/node-tools#8, #9, #10).
+    #
+    # Still a no-op for build TIME while packages.cacheClaim is unset below — no
+    # claim means no ledger and the cold verify path every Job. What 0.4.1
+    # changes regardless of the claim: that cold state is now stated in the
+    # build output rather than inferred, and a package the verifier cannot
+    # fetch is reported as a warning instead of passing by unnoticed. The
+    # npm-vs-bun registry-resolution mismatch that left @kdex-tech/ui
+    # `unverified` on every run is fixed here, not by the claim.
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.4.1
     toolsImagePullPolicy: IfNotPresent
     # Packaging-pipeline knobs (node-tools >= 0.3.0, kdex-tech/node-tools#3).
     # Empty = image defaults (npm + node), byte-identical to prior behavior.
