@@ -48,6 +48,9 @@ func (a *KDexHostDefaulter[T]) Default(ctx context.Context, obj T) error {
 		spec.ScriptLibraryRef.Kind = KDexScriptLibrary
 	}
 
+	if spec.Registries == nil {
+		spec.Registries = &kdexv1alpha1.Registries{}
+	}
 	if spec.Registries.ImageRegistry == "" {
 		spec.Registries.ImageRegistry = a.Configuration.DefaultImageRegistry
 	}
