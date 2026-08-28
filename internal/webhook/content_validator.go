@@ -25,18 +25,18 @@ type PageContentValidator[T runtime.Object] struct{}
 var _ admission.Validator[*kdexv1alpha1.KDexPageArchetype] = &PageContentValidator[*kdexv1alpha1.KDexPageArchetype]{}
 
 func (v *PageContentValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *PageContentValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *PageContentValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *PageContentValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *PageContentValidator[T]) validate(_ context.Context, obj T) error {
 	var content string
 	var name string
 
@@ -66,12 +66,12 @@ func (v *PageContentValidator[T]) validate(_ context.Context, obj T) (admission.
 		content = t.Spec.Content
 		name = t.Name
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	if err := render.ValidateContent(name, content); err != nil {
-		return nil, fmt.Errorf("invalid go template in spec.content: %w", err)
+		return fmt.Errorf("invalid go template in spec.content: %w", err)
 	}
 
-	return nil, nil
+	return nil
 }

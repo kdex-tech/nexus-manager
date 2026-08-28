@@ -19,18 +19,18 @@ type KDexUtilityPageValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexUtilityPage] = &KDexUtilityPageValidator[*kdexv1alpha1.KDexUtilityPage]{}
 
 func (v *KDexUtilityPageValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexUtilityPageValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexUtilityPageValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexUtilityPageValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexUtilityPageValidator[T]) validate(_ context.Context, obj T) error {
 	var spec *kdexv1alpha1.KDexUtilityPageSpec
 
 	switch t := any(obj).(type) {
@@ -39,19 +39,19 @@ func (v *KDexUtilityPageValidator[T]) validate(_ context.Context, obj T) (admiss
 	case *kdexv1alpha1.KDexClusterUtilityPage:
 		spec = &t.Spec
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	for idx, entry := range spec.ContentEntries {
 		if entry.RawHTML != "" {
 			if err := render.ValidateContent(entry.Slot, entry.RawHTML); err != nil {
-				return nil, fmt.Errorf("invalid go template in spec.contentEntries[%d].rawHTML: %w", idx, err)
+				return fmt.Errorf("invalid go template in spec.contentEntries[%d].rawHTML: %w", idx, err)
 			}
 		}
 		if entry.AppRef != nil && entry.AppRef.Name == "" {
-			return nil, fmt.Errorf("spec.contentEntries[%d].appRef.name is required", idx)
+			return fmt.Errorf("spec.contentEntries[%d].appRef.name is required", idx)
 		}
 	}
 
-	return nil, nil
+	return nil
 }

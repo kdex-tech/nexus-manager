@@ -18,41 +18,41 @@ type KDexHostValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexHost] = &KDexHostValidator[*kdexv1alpha1.KDexHost]{}
 
 func (v *KDexHostValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexHostValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexHostValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexHostValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexHostValidator[T]) validate(_ context.Context, obj T) error {
 	var host *kdexv1alpha1.KDexHost
 
 	switch t := any(obj).(type) {
 	case *kdexv1alpha1.KDexHost:
 		host = t
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	spec := &host.Spec
 
 	if spec.BrandName == "" {
-		return nil, fmt.Errorf(`spec.brandName: Invalid value: ""`)
+		return fmt.Errorf(`spec.brandName: Invalid value: ""`)
 	}
 
 	if err := validation.ValidateAssets(spec.Assets); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Validate ResourceProvider
 	if err := validation.ValidateResourceProvider(spec); err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }

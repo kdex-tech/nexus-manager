@@ -20,52 +20,52 @@ type KDexFunctionValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexFunction] = &KDexFunctionValidator[*kdexv1alpha1.KDexFunction]{}
 
 func (v *KDexFunctionValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexFunctionValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexFunctionValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexFunctionValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexFunctionValidator[T]) validate(_ context.Context, obj T) error {
 	var function *kdexv1alpha1.KDexFunction
 
 	switch t := any(obj).(type) {
 	case *kdexv1alpha1.KDexFunction:
 		function = t
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	spec := &function.Spec
 
 	// 1. Structural Validation
 	if spec.HostRef.Name == "" {
-		return nil, fmt.Errorf("spec.hostRef.name must not be empty")
+		return fmt.Errorf("spec.hostRef.name must not be empty")
 	}
 
 	re := spec.API.BasePathRegex()
 	if !re.MatchString(spec.API.BasePath) {
-		return nil, fmt.Errorf("spec.api.basePath %s does not match %s", spec.API.BasePath, re.String())
+		return fmt.Errorf("spec.api.basePath %s does not match %s", spec.API.BasePath, re.String())
 	}
 
 	re = spec.API.ItemPathRegex()
 	for curPath := range spec.API.Paths {
 		if !re.MatchString(curPath) {
-			return nil, fmt.Errorf("spec.api.paths[%s] does not match %s", curPath, re.String())
+			return fmt.Errorf("spec.api.paths[%s] does not match %s", curPath, re.String())
 		}
 	}
 
 	// 2. OpenAPI Validation using vacuum
 	if err := v.validateOpenAPI(spec); err != nil {
-		return nil, fmt.Errorf("OpenAPI validation failed: %w", err)
+		return fmt.Errorf("OpenAPI validation failed: %w", err)
 	}
 
-	return nil, nil
+	return nil
 }
 
 func (v *KDexFunctionValidator[T]) validateOpenAPI(spec *kdexv1alpha1.KDexFunctionSpec) error {

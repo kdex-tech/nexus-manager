@@ -19,18 +19,18 @@ type KDexScriptLibraryValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexScriptLibrary] = &KDexScriptLibraryValidator[*kdexv1alpha1.KDexScriptLibrary]{}
 
 func (v *KDexScriptLibraryValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexScriptLibraryValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexScriptLibraryValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexScriptLibraryValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexScriptLibraryValidator[T]) validate(_ context.Context, obj T) error {
 	clusterScoped := false
 	var spec *kdexv1alpha1.KDexScriptLibrarySpec
 
@@ -41,25 +41,25 @@ func (v *KDexScriptLibraryValidator[T]) validate(_ context.Context, obj T) (admi
 		clusterScoped = true
 		spec = &t.Spec
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	if spec.PackageReference != nil && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Name == "" {
-		return nil, fmt.Errorf("spec.packageReference.secretRef.name is required")
+		return fmt.Errorf("spec.packageReference.secretRef.name is required")
 	}
 
 	if clusterScoped && spec.PackageReference != nil && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Namespace == "" {
-		return nil, fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped script libraries")
+		return fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped script libraries")
 	}
 
 	if err := validation.ValidateScriptLibrary(spec); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Validate ResourceProvider
 	if err := validation.ValidateResourceProvider(spec); err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }

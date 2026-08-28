@@ -19,18 +19,18 @@ type KDexThemeValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexTheme] = &KDexThemeValidator[*kdexv1alpha1.KDexTheme]{}
 
 func (v *KDexThemeValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexThemeValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexThemeValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexThemeValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexThemeValidator[T]) validate(_ context.Context, obj T) error {
 	var spec *kdexv1alpha1.KDexThemeSpec
 
 	switch t := any(obj).(type) {
@@ -39,17 +39,17 @@ func (v *KDexThemeValidator[T]) validate(_ context.Context, obj T) (admission.Wa
 	case *kdexv1alpha1.KDexClusterTheme:
 		spec = &t.Spec
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	if err := validation.ValidateAssets(spec.Assets); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Validate ResourceProvider
 	if err := validation.ValidateResourceProvider(spec); err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }

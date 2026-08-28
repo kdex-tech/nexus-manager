@@ -22,6 +22,16 @@ linters:
     - unparam
     - unused
   settings:
+    goconst:
+      # Table-driven tests repeat literals by construction -- the same status
+      # string across twenty cases is the point of the table, not a missing
+      # constant.
+      ignore-tests: true
+      # OpenAPI document vocabulary: `description` is a key defined by the
+      # spec, and the generated document is more readable spelled the way the
+      # spec spells it than behind a constant.
+      ignore-string-values:
+        - "description"
     revive:
       rules:
         - name: comment-spacings

@@ -19,18 +19,18 @@ type KDexTranslationValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexTranslation] = &KDexTranslationValidator[*kdexv1alpha1.KDexTranslation]{}
 
 func (v *KDexTranslationValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexTranslationValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexTranslationValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) error {
 	var spec *kdexv1alpha1.KDexTranslationSpec
 
 	switch t := any(obj).(type) {
@@ -39,11 +39,11 @@ func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) (admiss
 	case *kdexv1alpha1.KDexClusterTranslation:
 		spec = &t.Spec
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	if len(spec.Translations) == 0 {
-		return nil, fmt.Errorf("no translations")
+		return fmt.Errorf("no translations")
 	}
 
 	// ensure that every language has the same keys as the first language
@@ -53,14 +53,14 @@ func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) (admiss
 		count := 0
 		for key := range firstKeys {
 			if _, ok := t.KeysAndValues[key]; !ok {
-				return nil, fmt.Errorf("language %s is missing key %s", t.Lang, key)
+				return fmt.Errorf("language %s is missing key %s", t.Lang, key)
 			}
 			count++
 		}
 		if count != len(spec.Translations[0].KeysAndValues) {
-			return nil, fmt.Errorf("language %s has different number of keys than %s", t.Lang, firstLanguage)
+			return fmt.Errorf("language %s has different number of keys than %s", t.Lang, firstLanguage)
 		}
 	}
 
-	return nil, nil
+	return nil
 }

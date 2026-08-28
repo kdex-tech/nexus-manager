@@ -283,7 +283,7 @@ KUSTOMIZE_VERSION ?= v5.8.1
 # https://github.com/kubernetes-sigs/controller-tools/releases/latest
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
 # https://github.com/golangci/golangci-lint/releases/latest
-GOLANGCI_LINT_VERSION ?= v2.10.1
+GOLANGCI_LINT_VERSION ?= v2.13.2
 
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')

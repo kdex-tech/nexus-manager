@@ -19,18 +19,18 @@ type KDexAppValidator[T runtime.Object] struct {
 var _ admission.Validator[*kdexv1alpha1.KDexApp] = &KDexAppValidator[*kdexv1alpha1.KDexApp]{}
 
 func (v *KDexAppValidator[T]) ValidateCreate(ctx context.Context, obj T) (admission.Warnings, error) {
-	return v.validate(ctx, obj)
+	return nil, v.validate(ctx, obj)
 }
 
 func (v *KDexAppValidator[T]) ValidateUpdate(ctx context.Context, oldObj, newObj T) (admission.Warnings, error) {
-	return v.validate(ctx, newObj)
+	return nil, v.validate(ctx, newObj)
 }
 
 func (v *KDexAppValidator[T]) ValidateDelete(ctx context.Context, obj T) (admission.Warnings, error) {
 	return nil, nil
 }
 
-func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) (admission.Warnings, error) {
+func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) error {
 	clusterScoped := false
 	var spec *kdexv1alpha1.KDexAppSpec
 
@@ -41,7 +41,7 @@ func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) (admission.Warn
 		clusterScoped = true
 		spec = &t.Spec
 	default:
-		return nil, fmt.Errorf("unsupported type: %T", t)
+		return fmt.Errorf("unsupported type: %T", t)
 	}
 
 	// apply the same logic as KDexScriptLibrary
@@ -52,21 +52,21 @@ func (v *KDexAppValidator[T]) validate(_ context.Context, obj T) (admission.Warn
 	}
 
 	if spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Name == "" {
-		return nil, fmt.Errorf("spec.packageReference.secretRef.name is required")
+		return fmt.Errorf("spec.packageReference.secretRef.name is required")
 	}
 
 	if clusterScoped && spec.PackageReference.SecretRef != nil && spec.PackageReference.SecretRef.Namespace == "" {
-		return nil, fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped apps")
+		return fmt.Errorf("spec.packageReference.secretRef.namespace is required for cluster scoped apps")
 	}
 
 	if err := validation.ValidateScriptLibrary(sl); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Validate ResourceProvider
 	if err := validation.ValidateResourceProvider(spec); err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
