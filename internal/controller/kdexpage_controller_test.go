@@ -66,7 +66,7 @@ var _ = Describe("KDexPage Controller", func() {
 
 			err := k8sClient.Create(ctx, resource)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType) must declare contentEntries with a 'main' slot`))
+			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType, no rewrite) must declare contentEntries with a 'main' slot`))
 		})
 
 		It("must not validate if contentEntries is empty", func() {
@@ -85,7 +85,7 @@ var _ = Describe("KDexPage Controller", func() {
 
 			err := k8sClient.Create(ctx, resource)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType) must declare contentEntries with a 'main' slot`))
+			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType, no rewrite) must declare contentEntries with a 'main' slot`))
 		})
 
 		It("must not validate if contentEntries doesn't have a 'main' slot", func() {
@@ -106,7 +106,7 @@ var _ = Describe("KDexPage Controller", func() {
 
 			err := k8sClient.Create(ctx, resource)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType) must declare contentEntries with a 'main' slot`))
+			Expect(err.Error()).To(ContainSubstring(`an HTML page (no mimeType, no rewrite) must declare contentEntries with a 'main' slot`))
 		})
 
 		It("must not validate if contentEntries doesn't have either 'rawHTML' or 'appRef'", func() {
