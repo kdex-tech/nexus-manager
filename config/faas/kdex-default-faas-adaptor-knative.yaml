@@ -37,6 +37,6 @@ spec:
       image: ghcr.io/kdex-tech/cli-tools:0.3.19
       committerEmail: test@kdex.dev
       committerName: KDex Codegen Bot
-    image: ghcr.io/kdex-tech/fngogen:0.4.1
+    image: ghcr.io/kdex-tech/fngogen:0.6.0
     language: go
   provider: knative
