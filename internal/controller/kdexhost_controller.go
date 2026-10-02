@@ -477,14 +477,6 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	log.Info("reconciled", "host", host.Name, "namespace", host.Namespace, "helmOp", helmOp, "internalHostOp", internalHostOp)
 
-	// Two distinct translations map to one KDexInternalTranslation name. The
-	// higher-precedence one is already being served; the host is Degraded until
-	// an author renames one. Any fix arrives as a watched edit, so no requeue.
-	if translationCollision != "" {
-		setTranslationCollisionCondition(&host, translationCollision)
-		return ctrl.Result{}, nil
-	}
-
 	// If an optional reference (theme, script library) was unresolved, the spec
 	// has now been mirrored to the KDexInternalHost. Stop here with the
 	// Progressing condition set above and requeue; the host is not Ready until
@@ -565,6 +557,15 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			host.Status.Attributes = make(map[string]string)
 		}
 		host.Status.Attributes["ingress"] = val
+	}
+
+	// Two distinct translations map to one KDexInternalTranslation name. The
+	// higher-precedence one is already being served; the host is Degraded,
+	// not Ready, until an author renames one. Any fix arrives as a watched
+	// edit, so no requeue.
+	if translationCollision != "" {
+		setTranslationCollisionCondition(&host, translationCollision)
+		return ctrl.Result{}, nil
 	}
 
 	kdexv1alpha1.SetConditions(

@@ -9,9 +9,11 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 var _ = Describe("KDexTranslation hostRef", func() {
@@ -127,6 +129,41 @@ var _ = Describe("KDexTranslation hostRef", func() {
 		}, "10s").Should(Succeed())
 
 		Eventually(internalGone(hostA+"-detach-strings"), "20s", "500ms").Should(BeTrue())
+	})
+
+	// A name collision Degrades the host, but only at the end of the readiness
+	// ladder: the reconcile still runs the helm/deployment/internal-host checks
+	// and still copies the internal host's ingress attribute into status.
+	It("degrades a host with a translation name collision after the readiness ladder", func() {
+		Expect(k8sClient.Create(ctx, newHost(hostA))).To(Succeed())
+		// Same internal name as the cluster default: <host>-kdex-default-translation.
+		Expect(k8sClient.Create(ctx, attached("kdex-default-translation", hostA))).To(Succeed())
+
+		readyResources(ctx, hostA, namespace)
+		Eventually(func() error {
+			ih := &kdexv1alpha1.KDexInternalHost{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: hostA}, ih); err != nil {
+				return err
+			}
+			patch := client.MergeFrom(ih.DeepCopy())
+			if ih.Status.Attributes == nil {
+				ih.Status.Attributes = map[string]string{}
+			}
+			ih.Status.Attributes["ingress"] = "203.0.113.7"
+			return k8sClient.Status().Patch(ctx, ih, patch)
+		}, "10s").Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			host := &kdexv1alpha1.KDexHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: hostA}, host)).To(Succeed())
+			g.Expect(host.Status.Attributes).To(HaveKeyWithValue("ingress", "203.0.113.7"),
+				"the ingress attribute is copied even while a collision stands")
+			degraded := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
+			g.Expect(degraded).NotTo(BeNil())
+			g.Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(degraded.Message).To(ContainSubstring("translation name collision"))
+			g.Expect(meta.IsStatusConditionTrue(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeReady))).To(BeFalse())
+		}, "20s", "500ms").Should(Succeed())
 	})
 
 	// Regression: before this change, removing a translationRefs entry left its
