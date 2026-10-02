@@ -112,6 +112,23 @@ var _ = Describe("KDexTranslation hostRef", func() {
 		Eventually(internalGone(hostB+"-shop-strings"), "20s", "500ms").Should(BeTrue())
 	})
 
+	It("prunes the copy when hostRef is removed", func() {
+		Expect(k8sClient.Create(ctx, newHost(hostA))).To(Succeed())
+		Expect(k8sClient.Create(ctx, attached("detach-strings", hostA))).To(Succeed())
+		Eventually(internalExists(hostA+"-detach-strings"), "20s", "500ms").Should(BeTrue())
+
+		Eventually(func() error {
+			latest := &kdexv1alpha1.KDexTranslation{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "detach-strings"}, latest); err != nil {
+				return err
+			}
+			latest.Spec.HostRef = nil
+			return k8sClient.Update(ctx, latest)
+		}, "10s").Should(Succeed())
+
+		Eventually(internalGone(hostA+"-detach-strings"), "20s", "500ms").Should(BeTrue())
+	})
+
 	// Regression: before this change, removing a translationRefs entry left its
 	// KDexInternalTranslation (and so its strings) live until the host was deleted.
 	It("prunes a host-declared translation when its translationRefs entry is removed", func() {
