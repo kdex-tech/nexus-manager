@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -203,7 +204,7 @@ func TestResolveTranslations_PrunesOnlyControlledStaleCopies(t *testing.T) {
 
 func TestResolveTranslations_NameCollisionIsReported(t *testing.T) {
 	host := trHost()
-	r, _ := newTranslationReconciler(t, host, defaultClusterTranslation(), nsTranslation("kdex-default-translation", "web", true))
+	r, fc := newTranslationReconciler(t, host, defaultClusterTranslation(), nsTranslation("kdex-default-translation", "web", true))
 
 	refs, collision, shouldReturn, _, err := r.resolveTranslations(context.Background(), host)
 
@@ -211,4 +212,42 @@ func TestResolveTranslations_NameCollisionIsReported(t *testing.T) {
 	require.False(t, shouldReturn)
 	assert.Equal(t, []string{"web-kdex-default-translation"}, refNames(refs))
 	assert.Contains(t, collision, "KDexTranslation/site/kdex-default-translation")
+	assert.Contains(t, collision, "KDexClusterTranslation//kdex-default-translation")
+
+	it := &kdexv1alpha1.KDexInternalTranslation{}
+	require.NoError(t, fc.Get(context.Background(), types.NamespacedName{Namespace: trNS, Name: "web-kdex-default-translation"}, it))
+	assert.Equal(t, "kdex-default-translation", it.Spec.Translations[0].KeysAndValues["k"],
+		"the higher-precedence self-attached source wins the shared internal name")
+}
+
+func TestResolveTranslations_SkipsDeletingSelfAttached(t *testing.T) {
+	host := trHost()
+	dying := nsTranslation("dying", "web", true)
+	now := metav1.Now()
+	dying.DeletionTimestamp = &now
+	dying.Finalizers = []string{"test.kdex.dev/hold"}
+	r, fc := newTranslationReconciler(t, host, defaultClusterTranslation(), dying)
+
+	refs, collision, shouldReturn, _, err := r.resolveTranslations(context.Background(), host)
+
+	require.NoError(t, err)
+	require.False(t, shouldReturn)
+	assert.Empty(t, collision)
+	assert.Equal(t, []string{"web-kdex-default-translation"}, refNames(refs))
+	err = fc.Get(context.Background(), types.NamespacedName{Namespace: trNS, Name: "web-dying"}, &kdexv1alpha1.KDexInternalTranslation{})
+	assert.True(t, apierrors.IsNotFound(err), "a translation being deleted is not copied")
+}
+
+func TestSetTranslationCollisionCondition(t *testing.T) {
+	host := trHost()
+
+	setTranslationCollisionCondition(host, "A and B")
+
+	degraded := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
+	ready := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeReady))
+	require.NotNil(t, degraded)
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Contains(t, degraded.Message, "translation name collision: A and B")
 }

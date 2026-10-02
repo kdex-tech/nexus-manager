@@ -481,16 +481,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// higher-precedence one is already being served; the host is Degraded until
 	// an author renames one. Any fix arrives as a watched edit, so no requeue.
 	if translationCollision != "" {
-		kdexv1alpha1.SetConditions(
-			&host.Status.Conditions,
-			kdexv1alpha1.ConditionStatuses{
-				Degraded:    metav1.ConditionTrue,
-				Progressing: metav1.ConditionFalse,
-				Ready:       metav1.ConditionFalse,
-			},
-			kdexv1alpha1.ConditionReasonReconcileError,
-			"translation name collision: "+translationCollision,
-		)
+		setTranslationCollisionCondition(&host, translationCollision)
 		return ctrl.Result{}, nil
 	}
 

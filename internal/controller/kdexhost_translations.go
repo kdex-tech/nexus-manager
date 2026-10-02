@@ -141,3 +141,18 @@ func (r *KDexHostReconciler) pruneInternalTranslations(ctx context.Context, host
 		}
 	}
 }
+
+// setTranslationCollisionCondition marks host Degraded because two distinct
+// translations map to one KDexInternalTranslation name.
+func setTranslationCollisionCondition(host *kdexv1alpha1.KDexHost, collision string) {
+	kdexv1alpha1.SetConditions(
+		&host.Status.Conditions,
+		kdexv1alpha1.ConditionStatuses{
+			Degraded:    metav1.ConditionTrue,
+			Progressing: metav1.ConditionFalse,
+			Ready:       metav1.ConditionFalse,
+		},
+		kdexv1alpha1.ConditionReasonReconcileError,
+		"translation name collision: "+collision,
+	)
+}
