@@ -414,7 +414,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		}
 	}
 
-	translationRefs, shouldReturn, r1, err := r.resolveTranslations(ctx, &host)
+	translationRefs, translationCollision, shouldReturn, r1, err := r.resolveTranslations(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveTranslations requested return", "requeueAfter", r1.RequeueAfter, "err", err)
 		if err == nil && r1.RequeueAfter > 0 {
@@ -476,6 +476,23 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}
 
 	log.Info("reconciled", "host", host.Name, "namespace", host.Namespace, "helmOp", helmOp, "internalHostOp", internalHostOp)
+
+	// Two distinct translations map to one KDexInternalTranslation name. The
+	// higher-precedence one is already being served; the host is Degraded until
+	// an author renames one. Any fix arrives as a watched edit, so no requeue.
+	if translationCollision != "" {
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionTrue,
+				Progressing: metav1.ConditionFalse,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconcileError,
+			"translation name collision: "+translationCollision,
+		)
+		return ctrl.Result{}, nil
+	}
 
 	// If an optional reference (theme, script library) was unresolved, the spec
 	// has now been mirrored to the KDexInternalHost. Stop here with the
@@ -594,13 +611,11 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, func(rawObj client.Object) []string {
-		translation := rawObj.(*kdexv1alpha1.KDexInternalTranslation)
-		if translation.Spec.HostRef.Name == "" {
-			return nil
-		}
-		return []string{translation.Spec.HostRef.Name}
-	}); err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, indexInternalTranslationByHost); err != nil {
+		return err
+	}
+
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexTranslation{}, hostIndexKey, indexTranslationByHostRef); err != nil {
 		return err
 	}
 

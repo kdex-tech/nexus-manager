@@ -1,11 +1,15 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // translationSource is one translation resolved for a host, before it is copied
@@ -81,4 +85,59 @@ func orderTranslationSources(
 	}
 	slices.Sort(conflicts)
 	return ordered, strings.Join(conflicts, "; ")
+}
+
+// indexTranslationByHostRef indexes a KDexTranslation by the host it attaches
+// itself to through spec.hostRef.
+func indexTranslationByHostRef(obj client.Object) []string {
+	t, ok := obj.(*kdexv1alpha1.KDexTranslation)
+	if !ok || t.Spec.HostRef == nil || t.Spec.HostRef.Name == "" {
+		return nil
+	}
+	return []string{t.Spec.HostRef.Name}
+}
+
+// indexInternalTranslationByHost indexes a KDexInternalTranslation by the host
+// it was produced for.
+func indexInternalTranslationByHost(obj client.Object) []string {
+	t, ok := obj.(*kdexv1alpha1.KDexInternalTranslation)
+	if !ok || t.Spec.HostRef.Name == "" {
+		return nil
+	}
+	return []string{t.Spec.HostRef.Name}
+}
+
+const translationGenerationSuffix = ".translation.generation"
+
+// pruneInternalTranslations deletes the KDexInternalTranslations this host
+// controls whose names are not in keep, and drops their generation attributes
+// from the host status. host-manager serves every internal translation that
+// names its host, so a copy left behind keeps serving strings whose source is
+// gone. Failures are logged and retried on the next reconcile; they never fail
+// this one.
+func (r *KDexHostReconciler) pruneInternalTranslations(ctx context.Context, host *kdexv1alpha1.KDexHost, keep map[string]bool) {
+	log := logf.FromContext(ctx).WithName("translation")
+
+	existing := &kdexv1alpha1.KDexInternalTranslationList{}
+	if err := r.List(ctx, existing, client.InNamespace(host.Namespace), client.MatchingFields{hostIndexKey: host.Name}); err != nil {
+		log.Error(err, "listing internal translations to prune")
+		return
+	}
+	for i := range existing.Items {
+		it := &existing.Items[i]
+		if keep[it.Name] || !it.DeletionTimestamp.IsZero() || !metav1.IsControlledBy(it, host) {
+			continue
+		}
+		if err := r.Delete(ctx, it); client.IgnoreNotFound(err) != nil {
+			log.Error(err, "pruning internal translation", "name", it.Name)
+			continue
+		}
+		log.V(1).Info("pruned internal translation", "name", it.Name)
+	}
+
+	for attr := range host.Status.Attributes {
+		if source, ok := strings.CutSuffix(attr, translationGenerationSuffix); ok && !keep[host.Name+"-"+source] {
+			delete(host.Status.Attributes, attr)
+		}
+	}
 }

@@ -180,72 +180,96 @@ func (r *KDexHostReconciler) createOrUpdateInternalUtilityPage(
 	return &corev1.LocalObjectReference{Name: name}, nil
 }
 
+// resolveTranslations resolves every translation attached to host: the default,
+// KDexTranslations that name the host in spec.hostRef, and the host's own
+// translationRefs. It writes one KDexInternalTranslation per source, prunes the
+// copies that are no longer attached, and returns their names in precedence
+// order (lowest first), which host-manager uses as its catalog write order.
+// collision is non-empty when two distinct sources map to one internal name.
 func (r *KDexHostReconciler) resolveTranslations(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-) ([]corev1.LocalObjectReference, bool, ctrl.Result, error) {
-	refs := []corev1.LocalObjectReference{}
-
-	for _, translationRef := range host.Spec.TranslationRefs {
-		resolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &translationRef, r.RequeueDelay)
-		if shouldReturn {
-			return nil, true, r1, err
+) ([]corev1.LocalObjectReference, string, bool, ctrl.Result, error) {
+	toSource := func(obj client.Object) translationSource {
+		s := translationSource{Namespace: obj.GetNamespace(), Name: obj.GetName(), Generation: obj.GetGeneration()}
+		switch v := obj.(type) {
+		case *kdexv1alpha1.KDexTranslation:
+			s.Kind = "KDexTranslation"
+			s.Spec = v.Spec.KDexTranslationSpec
+		case *kdexv1alpha1.KDexClusterTranslation:
+			s.Kind = "KDexClusterTranslation"
+			s.Spec = v.Spec
 		}
-
-		if resolvedObj != nil {
-			var spec kdexv1alpha1.KDexTranslationSpec
-			switch v := resolvedObj.(type) {
-			case *kdexv1alpha1.KDexTranslation:
-				spec = v.Spec.KDexTranslationSpec
-			case *kdexv1alpha1.KDexClusterTranslation:
-				spec = v.Spec
-			}
-
-			internalTranslation, err := r.createOrUpdateInternalTranslation(ctx, spec, resolvedObj.GetName(), resolvedObj.GetGeneration(), host)
-			if err != nil {
-				return nil, true, ctrl.Result{}, err
-			}
-			refs = append(refs, corev1.LocalObjectReference{Name: internalTranslation.Name})
-
-			if host.Status.Attributes == nil {
-				host.Status.Attributes = make(map[string]string)
-			}
-			host.Status.Attributes[translationRef.Name+".translation.generation"] = fmt.Sprintf("%d", resolvedObj.GetGeneration())
+		return s
+	}
+	resolve := func(ref *kdexv1alpha1.KDexObjectReference) (*translationSource, bool, ctrl.Result, error) {
+		obj, shouldReturn, res, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, ref, r.RequeueDelay)
+		if shouldReturn || obj == nil {
+			return nil, shouldReturn, res, err
 		}
+		s := toSource(obj)
+		return &s, false, ctrl.Result{}, nil
 	}
 
-	defaultTranslationRef := kdexv1alpha1.KDexObjectReference{
+	defaultSrc, shouldReturn, res, err := resolve(&kdexv1alpha1.KDexObjectReference{
 		Name: "kdex-default-translation",
 		Kind: "KDexClusterTranslation",
-	}
-
-	defaultResolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, &defaultTranslationRef, r.RequeueDelay)
+	})
 	if shouldReturn {
-		return nil, true, r1, err
+		return nil, "", true, res, err
 	}
 
-	if defaultResolvedObj != nil {
-		var spec kdexv1alpha1.KDexTranslationSpec
-		switch v := defaultResolvedObj.(type) {
-		case *kdexv1alpha1.KDexTranslation:
-			spec = v.Spec.KDexTranslationSpec
-		case *kdexv1alpha1.KDexClusterTranslation:
-			spec = v.Spec
+	attached := &kdexv1alpha1.KDexTranslationList{}
+	if err := r.List(ctx, attached, client.InNamespace(host.Namespace), client.MatchingFields{hostIndexKey: host.Name}); err != nil {
+		return nil, "", true, ctrl.Result{}, err
+	}
+	selfAttached := []translationSource{}
+	for i := range attached.Items {
+		t := &attached.Items[i]
+		if !t.DeletionTimestamp.IsZero() {
+			continue
 		}
+		s, shouldReturn, res, err := resolve(&kdexv1alpha1.KDexObjectReference{Kind: "KDexTranslation", Name: t.Name})
+		if shouldReturn {
+			return nil, "", true, res, err
+		}
+		if s != nil {
+			selfAttached = append(selfAttached, *s)
+		}
+	}
 
-		internalTranslation, err := r.createOrUpdateInternalTranslation(ctx, spec, defaultResolvedObj.GetName(), defaultResolvedObj.GetGeneration(), host)
+	declared := []translationSource{}
+	for i := range host.Spec.TranslationRefs {
+		s, shouldReturn, res, err := resolve(&host.Spec.TranslationRefs[i])
+		if shouldReturn {
+			return nil, "", true, res, err
+		}
+		if s != nil {
+			declared = append(declared, *s)
+		}
+	}
+
+	ordered, collision := orderTranslationSources(defaultSrc, selfAttached, declared)
+
+	refs := make([]corev1.LocalObjectReference, 0, len(ordered))
+	keep := make(map[string]bool, len(ordered))
+	for _, s := range ordered {
+		internalTranslation, err := r.createOrUpdateInternalTranslation(ctx, s.Spec, s.Name, s.Generation, host)
 		if err != nil {
-			return nil, true, ctrl.Result{}, err
+			return nil, "", true, ctrl.Result{}, err
 		}
 		refs = append(refs, corev1.LocalObjectReference{Name: internalTranslation.Name})
+		keep[internalTranslation.Name] = true
 
 		if host.Status.Attributes == nil {
 			host.Status.Attributes = make(map[string]string)
 		}
-		host.Status.Attributes[defaultTranslationRef.Name+".translation.generation"] = fmt.Sprintf("%d", defaultResolvedObj.GetGeneration())
+		host.Status.Attributes[s.Name+translationGenerationSuffix] = fmt.Sprintf("%d", s.Generation)
 	}
 
-	return refs, false, ctrl.Result{}, nil
+	r.pruneInternalTranslations(ctx, host, keep)
+
+	return refs, collision, false, ctrl.Result{}, nil
 }
 
 //nolint:gocyclo
