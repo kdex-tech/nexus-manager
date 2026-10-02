@@ -284,11 +284,11 @@ func TestKDexScriptLibraryReconcileIsStableWhenSettled(t *testing.T) {
 func TestKDexTranslationReconcileIsStableWhenSettled(t *testing.T) {
 	translation := &kdexv1alpha1.KDexTranslation{
 		ObjectMeta: metav1.ObjectMeta{Name: "translation", Namespace: "ns"},
-		Spec: kdexv1alpha1.KDexTranslationSpec{
+		Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{
 			Translations: []kdexv1alpha1.Translation{
 				{Lang: "en", KeysAndValues: map[string]string{"hello": "Hello"}},
 			},
-		},
+		}},
 	}
 
 	c, writes := newStatusWriteCounter(t, translation)

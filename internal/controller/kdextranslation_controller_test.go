@@ -41,7 +41,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{},
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{}},
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).NotTo(Succeed())
@@ -53,7 +53,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{},
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{}},
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).NotTo(Succeed())
@@ -65,9 +65,9 @@ var _ = Describe("KDexTranslation Controller", func() {
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{
 					Translations: []kdexv1alpha1.Translation{},
-				},
+				}},
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).NotTo(Succeed())
@@ -79,7 +79,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{
 					Translations: []kdexv1alpha1.Translation{
 						{
 							Lang: "fr",
@@ -88,7 +88,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 							},
 						},
 					},
-				},
+				}},
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -100,7 +100,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 					Name:      resourceName,
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{
 					Translations: []kdexv1alpha1.Translation{
 						{
 							Lang: "fr",
@@ -109,7 +109,7 @@ var _ = Describe("KDexTranslation Controller", func() {
 							},
 						},
 					},
-				},
+				}},
 			}
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())

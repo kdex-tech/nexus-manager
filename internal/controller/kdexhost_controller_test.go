@@ -780,7 +780,7 @@ var _ = Describe("KDexHost Controller", func() {
 					Name:      "non-existent-translation",
 					Namespace: namespace,
 				},
-				Spec: kdexv1alpha1.KDexTranslationSpec{
+				Spec: kdexv1alpha1.KDexNamespacedTranslationSpec{KDexTranslationSpec: kdexv1alpha1.KDexTranslationSpec{
 					Translations: []kdexv1alpha1.Translation{
 						{
 							Lang: "en",
@@ -790,7 +790,7 @@ var _ = Describe("KDexHost Controller", func() {
 							},
 						},
 					},
-				},
+				}},
 			}
 
 			Eventually(func() error {
@@ -842,7 +842,7 @@ var _ = Describe("KDexHost Controller", func() {
 					Namespace: namespace,
 				},
 				Spec: kdexv1alpha1.KDexInternalTranslationSpec{
-					KDexTranslationSpec: translation.Spec,
+					KDexTranslationSpec: translation.Spec.KDexTranslationSpec,
 					HostRef:             corev1.LocalObjectReference{Name: host.Name},
 				},
 			}

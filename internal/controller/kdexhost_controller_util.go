@@ -196,7 +196,7 @@ func (r *KDexHostReconciler) resolveTranslations(
 			var spec kdexv1alpha1.KDexTranslationSpec
 			switch v := resolvedObj.(type) {
 			case *kdexv1alpha1.KDexTranslation:
-				spec = v.Spec
+				spec = v.Spec.KDexTranslationSpec
 			case *kdexv1alpha1.KDexClusterTranslation:
 				spec = v.Spec
 			}
@@ -228,7 +228,7 @@ func (r *KDexHostReconciler) resolveTranslations(
 		var spec kdexv1alpha1.KDexTranslationSpec
 		switch v := defaultResolvedObj.(type) {
 		case *kdexv1alpha1.KDexTranslation:
-			spec = v.Spec
+			spec = v.Spec.KDexTranslationSpec
 		case *kdexv1alpha1.KDexClusterTranslation:
 			spec = v.Spec
 		}

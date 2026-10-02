@@ -35,7 +35,7 @@ func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) error {
 
 	switch t := any(obj).(type) {
 	case *kdexv1alpha1.KDexTranslation:
-		spec = &t.Spec
+		spec = &t.Spec.KDexTranslationSpec
 	case *kdexv1alpha1.KDexClusterTranslation:
 		spec = &t.Spec
 	default:
