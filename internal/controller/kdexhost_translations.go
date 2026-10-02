@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // translationSource is one translation resolved for a host, before it is copied
@@ -155,4 +157,16 @@ func setTranslationCollisionCondition(host *kdexv1alpha1.KDexHost, collision str
 		kdexv1alpha1.ConditionReasonReconcileError,
 		"translation name collision: "+collision,
 	)
+}
+
+// translationHostRefRequests enqueues the KDexHost a KDexTranslation attaches
+// itself to through spec.hostRef. EnqueueRequestsFromMapFunc maps both the old
+// and the new object on update, so a moved or removed hostRef also
+// re-reconciles the previous host, which then prunes its copy.
+func translationHostRefRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	t, ok := obj.(*kdexv1alpha1.KDexTranslation)
+	if !ok || t.Spec.HostRef == nil || t.Spec.HostRef.Name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: t.Namespace, Name: t.Spec.HostRef.Name}}}
 }

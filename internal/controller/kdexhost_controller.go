@@ -647,6 +647,9 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&kdexv1alpha1.KDexTranslation{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.TranslationRefs[*]}")).
 		Watches(
+			&kdexv1alpha1.KDexTranslation{},
+			handler.EnqueueRequestsFromMapFunc(translationHostRefRequests)).
+		Watches(
 			&kdexv1alpha1.KDexClusterTranslation{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.TranslationRefs[*]}")).
 		Watches(

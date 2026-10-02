@@ -16,6 +16,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func trSource(kind, ns, name string) translationSource {
@@ -250,4 +251,12 @@ func TestSetTranslationCollisionCondition(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, degraded.Status)
 	assert.Equal(t, metav1.ConditionFalse, ready.Status)
 	assert.Contains(t, degraded.Message, "translation name collision: A and B")
+}
+
+func TestTranslationHostRefRequests(t *testing.T) {
+	assert.Equal(t,
+		[]reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: trNS, Name: "web"}}},
+		translationHostRefRequests(context.Background(), nsTranslation("a", "web", true)))
+	assert.Empty(t, translationHostRefRequests(context.Background(), nsTranslation("b", "", true)))
+	assert.Empty(t, translationHostRefRequests(context.Background(), defaultClusterTranslation()))
 }
