@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 
+	"golang.org/x/text/language"
+	"golang.org/x/text/message/catalog"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -59,6 +62,20 @@ func (v *KDexTranslationValidator[T]) validate(_ context.Context, obj T) error {
 		}
 		if count != len(spec.Translations[0].KeysAndValues) {
 			return fmt.Errorf("language %s has different number of keys than %s", t.Lang, firstLanguage)
+		}
+	}
+
+	// host-manager compiles every value into a golang.org/x/text message
+	// catalog; reject what it cannot compile (e.g. "Price: ${") here, where the
+	// author sees the error. host-manager also skips such a value, since this
+	// webhook can be disabled or fail open.
+	scratch := catalog.NewBuilder()
+	for _, t := range spec.Translations {
+		tag := language.Make(t.Lang)
+		for _, key := range slices.Sorted(maps.Keys(t.KeysAndValues)) {
+			if err := scratch.SetString(tag, key, t.KeysAndValues[key]); err != nil {
+				return fmt.Errorf("language %s key %q: value is not a valid message: %w", t.Lang, key, err)
+			}
 		}
 	}
 
