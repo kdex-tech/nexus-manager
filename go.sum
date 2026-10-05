@@ -221,8 +221,8 @@ github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnr
 github.com/json-iterator/go v1.1.12/go.mod h1:e30LSqwooZae/UwlEbR2852Gd8hjQvJoHmT4TnhNGBo=
 github.com/kdex-tech/dmapper v0.2.0 h1:SOoFvfIfX2xSFuwcMdIknrwIl9ZmnmqeMyA92/65Ojg=
 github.com/kdex-tech/dmapper v0.2.0/go.mod h1:XkyK23pcd11UHZdzPpf01JozQAKRJy1CsSYV2Zr9kLg=
-github.com/kdex-tech/kdex-crds v0.14.249 h1:QJJW7akrWQ5fue/TOkM7HdLECOOYxmjOWlsftFEdMpE=
-github.com/kdex-tech/kdex-crds v0.14.249/go.mod h1:iP5zT8h5Yczi+1s7nPVBlGRZY9bLprna3wLvilCZeF8=
+github.com/kdex-tech/kdex-crds v0.14.250 h1:+i7PDEQLPmWQdgcpwG/qUt6G6DgLinBuEsbeJGETngc=
+github.com/kdex-tech/kdex-crds v0.14.250/go.mod h1:iP5zT8h5Yczi+1s7nPVBlGRZY9bLprna3wLvilCZeF8=
 github.com/klauspost/compress v1.18.1 h1:bcSGx7UbpBqMChDtsF28Lw6v/G94LPrrbMbdC3JH2co=
 github.com/klauspost/compress v1.18.1/go.mod h1:ZQFFVG+MdnR0P+l6wpXgIL4NTtwiKIdBnrBd8Nrxr+0=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
