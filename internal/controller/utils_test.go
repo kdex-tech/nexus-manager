@@ -267,6 +267,7 @@ func cleanupResources(namespace string) {
 	for _, pair := range []Pairs{
 		{&kdexv1alpha1.KDexApp{}, &kdexv1alpha1.KDexAppList{}},
 		{&kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}},
+		{&kdexv1alpha1.KDexHostExtension{}, &kdexv1alpha1.KDexHostExtensionList{}},
 		{&kdexv1alpha1.KDexInternalHost{}, &kdexv1alpha1.KDexInternalHostList{}},
 		{&kdexv1alpha1.KDexInternalUtilityPage{}, &kdexv1alpha1.KDexInternalUtilityPageList{}},
 		{&kdexv1alpha1.KDexPageArchetype{}, &kdexv1alpha1.KDexPageArchetypeList{}},

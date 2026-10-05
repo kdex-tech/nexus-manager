@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/kdex-tech/nexus-manager/internal/validation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -52,6 +53,12 @@ func (v *KDexHostValidator[T]) validate(_ context.Context, obj T) error {
 	// Validate ResourceProvider
 	if err := validation.ValidateResourceProvider(spec); err != nil {
 		return err
+	}
+
+	if spec.ExtensionSelector != nil {
+		if _, err := metav1.LabelSelectorAsSelector(spec.ExtensionSelector); err != nil {
+			return fmt.Errorf("spec.extensionSelector: %w", err)
+		}
 	}
 
 	return nil
