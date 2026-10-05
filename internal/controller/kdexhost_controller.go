@@ -439,6 +439,21 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return r1, err
 	}
 
+	extensions, err := r.resolveExtensions(ctx, &host)
+	if err != nil {
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionTrue,
+				Progressing: metav1.ConditionFalse,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconcileError,
+			err.Error(),
+		)
+		return ctrl.Result{}, err
+	}
+
 	log.Info("calling reconcileHelmReleases", "host", host.Name)
 	helmOp, err := r.reconcileHelmReleases(ctx, &host, secrets, log)
 	if err != nil {
@@ -460,7 +475,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// which is especially important for tests that monitor these attributes.
 	var internalHostOp controllerutil.OperationResult
 	var internalHost *kdexv1alpha1.KDexInternalHost
-	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, announcementRef, errorRef, loginRef, translationRefs)
+	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, announcementRef, errorRef, loginRef, translationRefs, extensions)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -610,6 +625,9 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexTranslation{}, hostIndexKey, indexTranslationByHostRef); err != nil {
 		return err
 	}
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexHostExtension{}, hostIndexKey, indexExtensionByHostRef); err != nil {
+		return err
+	}
 
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, func(rawObj client.Object) []string {
 		utilityPage := rawObj.(*kdexv1alpha1.KDexInternalUtilityPage)
@@ -650,6 +668,9 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&kdexv1alpha1.KDexTranslation{},
 			handler.EnqueueRequestsFromMapFunc(translationHostRefRequests)).
+		Watches(
+			&kdexv1alpha1.KDexHostExtension{},
+			handler.EnqueueRequestsFromMapFunc(extensionHostRefRequests)).
 		Watches(
 			&kdexv1alpha1.KDexClusterTranslation{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.TranslationRefs[*]}")).
@@ -709,6 +730,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	errorRef *corev1.LocalObjectReference,
 	loginRef *corev1.LocalObjectReference,
 	translationRefs []corev1.LocalObjectReference,
+	extensions []kdexv1alpha1.InternalHostExtension,
 ) (controllerutil.OperationResult, *kdexv1alpha1.KDexInternalHost, error) {
 	internalHost := &kdexv1alpha1.KDexInternalHost{
 		ObjectMeta: metav1.ObjectMeta{
@@ -754,6 +776,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 		internalHost.Spec.ErrorRef = errorRef
 		internalHost.Spec.LoginRef = loginRef
 		internalHost.Spec.InternalTranslationRefs = translationRefs
+		internalHost.Spec.Extensions = extensions
 
 		return ctrl.SetControllerReference(host, internalHost, r.Scheme)
 	})

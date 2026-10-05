@@ -10,7 +10,9 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func newExtension(name, host string, lbl map[string]string, weight int32) *kdexv1alpha1.KDexHostExtension {
@@ -70,5 +72,85 @@ var _ = Describe("KDexHostExtension validation", func() {
 		err := k8sClient.Create(ctx, host)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("spec.extensionSelector"))
+	})
+})
+
+var _ = Describe("KDexHostExtension attach", func() {
+	ctx := context.Background()
+	var hostA, hostB string
+	eum := map[string]string{"kdex.dev/extension": "eum"}
+
+	BeforeEach(func() {
+		s := time.Now().UnixNano()
+		hostA, hostB = fmt.Sprintf("hx-a-%d", s), fmt.Sprintf("hx-b-%d", s)
+	})
+	AfterEach(func() { cleanupResources(namespace) })
+
+	host := func(name string, sel *metav1.LabelSelector) *kdexv1alpha1.KDexHost {
+		return &kdexv1alpha1.KDexHost{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: kdexv1alpha1.KDexHostSpec{
+				BrandName: "KDex Tech", Organization: "KDex Tech Inc.",
+				Routing:           kdexv1alpha1.Routing{Domains: []string{name + ".example.test"}},
+				ExtensionSelector: sel,
+			},
+		}
+	}
+	applied := func(h string) func() []string {
+		return func() []string {
+			ih := &kdexv1alpha1.KDexInternalHost{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: h}, ih); err != nil {
+				return nil
+			}
+			out := []string{}
+			for _, e := range ih.Spec.Extensions {
+				out = append(out, e.Name)
+			}
+			return out
+		}
+	}
+	update := func(obj client.Object, mutate func()) {
+		Eventually(func() error {
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+				return err
+			}
+			mutate()
+			return k8sClient.Update(ctx, obj)
+		}, "10s").Should(Succeed())
+	}
+
+	It("applies nothing without a selector, then attaches in order once selected", func() {
+		h := host(hostA, nil)
+		Expect(k8sClient.Create(ctx, h)).To(Succeed())
+		Expect(k8sClient.Create(ctx, newExtension("zeta", hostA, eum, 10))).To(Succeed())
+		Expect(k8sClient.Create(ctx, newExtension("alpha", hostA, eum, 10))).To(Succeed())
+		Expect(k8sClient.Create(ctx, newExtension("first", hostA, eum, -1))).To(Succeed())
+
+		Consistently(applied(hostA), "3s", "500ms").Should(BeEmpty(), "no selector accepts none")
+
+		update(h, func() { h.Spec.ExtensionSelector = &metav1.LabelSelector{MatchLabels: eum} })
+		Eventually(applied(hostA), "20s", "500ms").Should(Equal([]string{"first", "alpha", "zeta"}))
+
+		// Removing the selector detaches everything.
+		update(h, func() { h.Spec.ExtensionSelector = nil })
+		Eventually(applied(hostA), "20s", "500ms").Should(BeEmpty())
+	})
+
+	It("follows relabel, hostRef move and delete", func() {
+		Expect(k8sClient.Create(ctx, host(hostA, &metav1.LabelSelector{MatchLabels: eum}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, host(hostB, &metav1.LabelSelector{MatchLabels: eum}))).To(Succeed())
+		e := newExtension("mover", hostA, eum, 0)
+		Expect(k8sClient.Create(ctx, e)).To(Succeed())
+		Eventually(applied(hostA), "20s", "500ms").Should(Equal([]string{"mover"}))
+
+		update(e, func() { e.Labels = nil })
+		Eventually(applied(hostA), "20s", "500ms").Should(BeEmpty(), "relabel detaches")
+
+		update(e, func() { e.Labels = eum; e.Spec.HostRef.Name = hostB })
+		Eventually(applied(hostB), "20s", "500ms").Should(Equal([]string{"mover"}))
+		Eventually(applied(hostA), "20s", "500ms").Should(BeEmpty())
+
+		Expect(k8sClient.Delete(ctx, e)).To(Succeed())
+		Eventually(applied(hostB), "20s", "500ms").Should(BeEmpty(), "delete detaches")
 	})
 })

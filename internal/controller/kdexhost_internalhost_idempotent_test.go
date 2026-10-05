@@ -72,7 +72,7 @@ var _ = Describe("KDexInternalHost idempotent write", func() {
 			}
 
 			// First call creates the KDexInternalHost.
-			op1, _, err := hostReconciler.createOrUpdateInternalHostResource(ctx, host, nil, nil, nil, nil)
+			op1, _, err := hostReconciler.createOrUpdateInternalHostResource(ctx, host, nil, nil, nil, nil, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(op1).To(Equal(controllerutil.OperationResultCreated))
 
@@ -82,7 +82,7 @@ var _ = Describe("KDexInternalHost idempotent write", func() {
 
 			// Second call with the identical host must be a no-op: no Update
 			// API call (OperationResultNone) and no resourceVersion bump.
-			op2, _, err := hostReconciler.createOrUpdateInternalHostResource(ctx, host, nil, nil, nil, nil)
+			op2, _, err := hostReconciler.createOrUpdateInternalHostResource(ctx, host, nil, nil, nil, nil, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(op2).To(Equal(controllerutil.OperationResultNone),
 				"expected no write on an unchanged reconcile, got %q", op2)
