@@ -89,11 +89,10 @@ func containsExtension(es []kdexv1alpha1.KDexHostExtension, name string) bool {
 	return false
 }
 
-// extensionsForHost enqueues every extension naming a host, so a host's
-// creation, deletion or selector change re-evaluates their conditions.
-func (r *KDexHostExtensionReconciler) extensionsForHost(ctx context.Context, obj client.Object) []reconcile.Request {
+// extensionsNaming enqueues every extension in namespace that names host.
+func (r *KDexHostExtensionReconciler) extensionsNaming(ctx context.Context, namespace, host string) []reconcile.Request {
 	list := &kdexv1alpha1.KDexHostExtensionList{}
-	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace()), client.MatchingFields{hostIndexKey: obj.GetName()}); err != nil {
+	if err := r.List(ctx, list, client.InNamespace(namespace), client.MatchingFields{hostIndexKey: host}); err != nil {
 		return nil
 	}
 	out := make([]reconcile.Request, 0, len(list.Items))
@@ -103,11 +102,31 @@ func (r *KDexHostExtensionReconciler) extensionsForHost(ctx context.Context, obj
 	return out
 }
 
+// extensionsForHost enqueues every extension naming a host, so a host's
+// creation, deletion or selector change re-evaluates their conditions.
+func (r *KDexHostExtensionReconciler) extensionsForHost(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.extensionsNaming(ctx, obj.GetNamespace(), obj.GetName())
+}
+
+// extensionsForSibling enqueues every extension sharing the changed
+// extension's host. The maxHostExtensions cap makes one extension's condition
+// depend on its siblings: a sibling's create, delete, relabel or weight change
+// can move it into or out of the applied window. Update events map both the
+// old and new object, so a hostRef move re-evaluates both hosts' extensions.
+func (r *KDexHostExtensionReconciler) extensionsForSibling(ctx context.Context, obj client.Object) []reconcile.Request {
+	e, ok := obj.(*kdexv1alpha1.KDexHostExtension)
+	if !ok {
+		return nil
+	}
+	return r.extensionsNaming(ctx, e.Namespace, e.Spec.HostRef.Name)
+}
+
 // SetupWithManager must run after KDexHostReconciler.SetupWithManager, which
 // registers the hostIndexKey index on KDexHostExtension.
 func (r *KDexHostExtensionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kdexv1alpha1.KDexHostExtension{}).
+		Watches(&kdexv1alpha1.KDexHostExtension{}, handler.EnqueueRequestsFromMapFunc(r.extensionsForSibling)).
 		Watches(&kdexv1alpha1.KDexHost{}, handler.EnqueueRequestsFromMapFunc(r.extensionsForHost)).
 		Named("kdexhostextension").
 		Complete(r)

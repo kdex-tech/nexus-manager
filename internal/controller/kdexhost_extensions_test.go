@@ -116,3 +116,27 @@ func TestResolveExtensions_ListErrorIsNotSelectorError(t *testing.T) {
 	require.ErrorIs(t, err, boom)
 	assert.NotErrorIs(t, err, errInvalidExtensionSelector)
 }
+
+func TestExtensionsForSibling_EnqueuesAllExtensionsOfSameHost(t *testing.T) {
+	a, b, c := ext("a", 0, nil), ext("b", 1, nil), ext("c", 2, nil)
+	other := ext("o", 0, nil)
+	other.Spec.HostRef.Name = "other"
+	elsewhere := ext("e", 0, nil)
+	elsewhere.Namespace = "ns2"
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, kdexv1alpha1.AddToScheme(scheme))
+	fc := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(&a, &b, &c, &other, &elsewhere).
+		WithIndex(&kdexv1alpha1.KDexHostExtension{}, hostIndexKey, indexExtensionByHostRef).
+		Build()
+	r := &KDexHostExtensionReconciler{Client: fc, Scheme: scheme}
+
+	got := r.extensionsForSibling(context.Background(), &b)
+	var names []string
+	for _, req := range got {
+		assert.Equal(t, "ns", req.Namespace)
+		names = append(names, req.Name)
+	}
+	assert.ElementsMatch(t, []string{"a", "b", "c"}, names)
+}
