@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -8,7 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func ext(name string, weight int32, lbl map[string]string) kdexv1alpha1.KDexHostExtension {
@@ -73,4 +79,40 @@ func TestSelectExtensions_Overflow(t *testing.T) {
 func TestSelectExtensions_InvalidSelector(t *testing.T) {
 	_, _, err := selectExtensions(hostWithSelector(&metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "k", Operator: "Bogus"}}}), nil)
 	assert.Error(t, err)
+}
+
+func newExtensionReconciler(t *testing.T, fns interceptor.Funcs, objs ...client.Object) *KDexHostReconciler {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, kdexv1alpha1.AddToScheme(scheme))
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithIndex(&kdexv1alpha1.KDexHostExtension{}, hostIndexKey, indexExtensionByHostRef).
+		WithInterceptorFuncs(fns).
+		Build()
+	return &KDexHostReconciler{Client: fc, Scheme: scheme}
+}
+
+func TestResolveExtensions_InvalidSelectorFailsClosed(t *testing.T) {
+	e := ext("a", 0, eumLabel)
+	r := newExtensionReconciler(t, interceptor.Funcs{}, &e)
+	host := hostWithSelector(&metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "k", Operator: "Bogus"}}})
+	host.Status.Attributes = map[string]string{"x" + extensionGenerationSuffix: "3", "other": "keep"}
+
+	got, err := r.resolveExtensions(context.Background(), host)
+	assert.Nil(t, got)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errInvalidExtensionSelector)
+	assert.Equal(t, map[string]string{"other": "keep"}, host.Status.Attributes)
+}
+
+func TestResolveExtensions_ListErrorIsNotSelectorError(t *testing.T) {
+	boom := errors.New("boom")
+	r := newExtensionReconciler(t, interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error { return boom },
+	})
+	_, err := r.resolveExtensions(context.Background(), hostWithSelector(&metav1.LabelSelector{}))
+	require.ErrorIs(t, err, boom)
+	assert.NotErrorIs(t, err, errInvalidExtensionSelector)
 }

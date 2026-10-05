@@ -3,6 +3,7 @@ package controller
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,6 +21,11 @@ import (
 const maxHostExtensions = 32
 
 const extensionGenerationSuffix = ".extension.generation"
+
+// errInvalidExtensionSelector marks a host whose spec.extensionSelector cannot
+// be parsed. The reconciler fails closed: no extensions apply, the host is
+// Degraded, and the rest of the reconcile still runs.
+var errInvalidExtensionSelector = errors.New("invalid spec.extensionSelector")
 
 // indexExtensionByHostRef indexes a KDexHostExtension by the host it names.
 func indexExtensionByHostRef(obj client.Object) []string {
@@ -77,26 +83,28 @@ func selectExtensions(host *kdexv1alpha1.KDexHost, candidates []kdexv1alpha1.KDe
 // resolveExtensions lists the extensions naming host, selects the applied set,
 // records each applied extension's generation in host status, and returns them
 // as the internal host's spec.extensions — nil when none, so an unchanged host
-// does not churn its internal host (nexus issue #19).
+// does not churn its internal host (nexus issue #19). An unparseable selector
+// returns errInvalidExtensionSelector with nil extensions (fail closed); any
+// other error is transient and should abort the reconcile.
 func (r *KDexHostReconciler) resolveExtensions(ctx context.Context, host *kdexv1alpha1.KDexHost) ([]kdexv1alpha1.InternalHostExtension, error) {
 	list := &kdexv1alpha1.KDexHostExtensionList{}
 	if err := r.List(ctx, list, client.InNamespace(host.Namespace), client.MatchingFields{hostIndexKey: host.Name}); err != nil {
 		return nil, err
 	}
+	for attr := range host.Status.Attributes {
+		if strings.HasSuffix(attr, extensionGenerationSuffix) {
+			delete(host.Status.Attributes, attr)
+		}
+	}
 	applied, overflow, err := selectExtensions(host, list.Items)
 	if err != nil {
-		return nil, fmt.Errorf("spec.extensionSelector: %w", err)
+		return nil, fmt.Errorf("%w: %w", errInvalidExtensionSelector, err)
 	}
 	if len(overflow) > 0 {
 		logf.FromContext(ctx).Info("host selects more extensions than it can apply; ignoring the rest",
 			"limit", maxHostExtensions, "ignored", len(overflow))
 	}
 
-	for attr := range host.Status.Attributes {
-		if strings.HasSuffix(attr, extensionGenerationSuffix) {
-			delete(host.Status.Attributes, attr)
-		}
-	}
 	if len(applied) == 0 {
 		return nil, nil
 	}

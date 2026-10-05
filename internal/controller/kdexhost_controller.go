@@ -439,7 +439,15 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		return r1, err
 	}
 
+	// An unparseable extensionSelector fails closed: no extensions apply (nil),
+	// the internal host is still written, and the host is marked Degraded at
+	// the end of the readiness ladder so later steps cannot overwrite it.
+	var extensionSelectorErr error
 	extensions, err := r.resolveExtensions(ctx, &host)
+	if errors.Is(err, errInvalidExtensionSelector) {
+		extensionSelectorErr = err
+		err = nil
+	}
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -572,6 +580,20 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			host.Status.Attributes = make(map[string]string)
 		}
 		host.Status.Attributes["ingress"] = val
+	}
+
+	if extensionSelectorErr != nil {
+		kdexv1alpha1.SetConditions(
+			&host.Status.Conditions,
+			kdexv1alpha1.ConditionStatuses{
+				Degraded:    metav1.ConditionTrue,
+				Progressing: metav1.ConditionFalse,
+				Ready:       metav1.ConditionFalse,
+			},
+			kdexv1alpha1.ConditionReasonReconcileError,
+			extensionSelectorErr.Error(),
+		)
+		return ctrl.Result{}, nil
 	}
 
 	// Two distinct translations map to one KDexInternalTranslation name. The
