@@ -93,6 +93,9 @@ package controller
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations,                        verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations/finalizers,             verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations/status,                 verbs=get;update;patch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions,                       verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions/finalizers,            verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions/status,                verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages,                        verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages/finalizers,             verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages/status,                 verbs=get;update;patch

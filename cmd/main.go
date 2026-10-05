@@ -292,6 +292,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "KDexHost")
 		os.Exit(1)
 	}
+	if err := (&controller.KDexHostExtensionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "KDexHostExtension")
+		os.Exit(1)
+	}
 	if err := (&controller.KDexPageArchetypeReconciler{
 		Client:       mgr.GetClient(),
 		RequeueDelay: requeueDelay,

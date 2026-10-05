@@ -220,6 +220,9 @@ var _ = BeforeSuite(func() {
 	err = hostReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = (&KDexHostExtensionReconciler{Client: k8sManager.GetClient(), Scheme: k8sManager.GetScheme()}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
 	// Page Archetype
 	pageArchetypeReconciler := &KDexPageArchetypeReconciler{
 		Client:       k8sClient,

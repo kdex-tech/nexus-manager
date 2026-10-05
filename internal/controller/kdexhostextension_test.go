@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -152,5 +153,49 @@ var _ = Describe("KDexHostExtension attach", func() {
 
 		Expect(k8sClient.Delete(ctx, e)).To(Succeed())
 		Eventually(applied(hostB), "20s", "500ms").Should(BeEmpty(), "delete detaches")
+	})
+})
+
+var _ = Describe("KDexHostExtension status", func() {
+	ctx := context.Background()
+	var hostName string
+	eum := map[string]string{"kdex.dev/extension": "eum"}
+	BeforeEach(func() { hostName = fmt.Sprintf("hx-st-%d", time.Now().UnixNano()) })
+	AfterEach(func() { cleanupResources(namespace) })
+
+	reason := func(name string) func() string {
+		return func() string {
+			e := &kdexv1alpha1.KDexHostExtension{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, e); err != nil {
+				return ""
+			}
+			c := meta.FindStatusCondition(e.Status.Conditions, "Attached")
+			if c == nil {
+				return ""
+			}
+			return c.Reason
+		}
+	}
+
+	It("reports HostNotFound, NotSelected, then Attached", func() {
+		Expect(k8sClient.Create(ctx, newExtension("st", hostName, eum, 0))).To(Succeed())
+		Eventually(reason("st"), "20s", "500ms").Should(Equal("HostNotFound"))
+
+		h := &kdexv1alpha1.KDexHost{
+			ObjectMeta: metav1.ObjectMeta{Name: hostName, Namespace: namespace},
+			Spec: kdexv1alpha1.KDexHostSpec{BrandName: "KDex Tech", Organization: "KDex Tech Inc.",
+				Routing: kdexv1alpha1.Routing{Domains: []string{hostName + ".example.test"}}},
+		}
+		Expect(k8sClient.Create(ctx, h)).To(Succeed())
+		Eventually(reason("st"), "20s", "500ms").Should(Equal("NotSelected"))
+
+		Eventually(func() error {
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(h), h); err != nil {
+				return err
+			}
+			h.Spec.ExtensionSelector = &metav1.LabelSelector{MatchLabels: eum}
+			return k8sClient.Update(ctx, h)
+		}, "10s").Should(Succeed())
+		Eventually(reason("st"), "20s", "500ms").Should(Equal("Attached"))
 	})
 })

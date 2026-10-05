@@ -98,6 +98,7 @@ rules:
   - kdexclusterutilitypages
   - kdexfaasadaptors
   - kdexfunctions
+  - kdexhostextensions
   - kdexhosts
   - kdexinternalhosts
   - kdexinternalpackagereferences
@@ -138,6 +139,7 @@ rules:
   - kdexclusterutilitypages/finalizers
   - kdexfaasadaptors/finalizers
   - kdexfunctions/finalizers
+  - kdexhostextensions/finalizers
   - kdexhosts/finalizers
   - kdexinternalhosts/finalizers
   - kdexinternalpackagereferences/finalizers
@@ -170,6 +172,7 @@ rules:
   - kdexclusterutilitypages/status
   - kdexfaasadaptors/status
   - kdexfunctions/status
+  - kdexhostextensions/status
   - kdexhosts/status
   - kdexinternalhosts/status
   - kdexinternalpackagereferences/status
