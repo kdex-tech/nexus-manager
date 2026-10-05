@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kdex-tech/dmapper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -47,24 +48,41 @@ func extensionHostRefRequests(_ context.Context, obj client.Object) []reconcile.
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: e.Namespace, Name: e.Spec.HostRef.Name}}}
 }
 
+// invalidExtension is a selected extension whose claimMappings do not compile,
+// with the compile error that excluded it.
+type invalidExtension struct {
+	kdexv1alpha1.KDexHostExtension
+	err error
+}
+
 // selectExtensions returns, in application order (weight ascending, then
 // name), the candidates host accepts: they name host, are not being deleted,
-// and match host.spec.extensionSelector. At most maxHostExtensions are
-// applied; the rest are returned as overflow. A nil selector accepts none
-// (extensions grant authority, so consent is explicit); an unparseable one
-// accepts none and returns the error.
-func selectExtensions(host *kdexv1alpha1.KDexHost, candidates []kdexv1alpha1.KDexHostExtension) (applied, overflow []kdexv1alpha1.KDexHostExtension, err error) {
+// match host.spec.extensionSelector, and have claimMappings that compile. At
+// most maxHostExtensions are applied; the rest are returned as overflow. A
+// selected extension whose claimMappings do not compile is returned as invalid
+// and excluded before the cap, so it never takes a valid extension's slot:
+// applying it would make host-manager's mapper build fail and freeze the
+// host's previous auth config. A nil selector accepts none (extensions grant
+// authority, so consent is explicit); an unparseable one accepts none and
+// returns the error.
+func selectExtensions(host *kdexv1alpha1.KDexHost, candidates []kdexv1alpha1.KDexHostExtension) (applied, overflow []kdexv1alpha1.KDexHostExtension, invalid []invalidExtension, err error) {
 	if host.Spec.ExtensionSelector == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	sel, err := metav1.LabelSelectorAsSelector(host.Spec.ExtensionSelector)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	matched := []kdexv1alpha1.KDexHostExtension{}
 	for _, e := range candidates {
 		if e.Spec.HostRef.Name != host.Name || !e.DeletionTimestamp.IsZero() || !sel.Matches(labels.Set(e.Labels)) {
 			continue
+		}
+		if len(e.Spec.ClaimMappings) > 0 {
+			if _, err := dmapper.NewMapper(e.Spec.ClaimMappings); err != nil {
+				invalid = append(invalid, invalidExtension{KDexHostExtension: e, err: err})
+				continue
+			}
 		}
 		matched = append(matched, e)
 	}
@@ -75,9 +93,9 @@ func selectExtensions(host *kdexv1alpha1.KDexHost, candidates []kdexv1alpha1.KDe
 		return strings.Compare(a.Name, b.Name)
 	})
 	if len(matched) > maxHostExtensions {
-		return matched[:maxHostExtensions], matched[maxHostExtensions:], nil
+		return matched[:maxHostExtensions], matched[maxHostExtensions:], invalid, nil
 	}
-	return matched, nil, nil
+	return matched, nil, invalid, nil
 }
 
 // resolveExtensions lists the extensions naming host, selects the applied set,
@@ -96,9 +114,13 @@ func (r *KDexHostReconciler) resolveExtensions(ctx context.Context, host *kdexv1
 			delete(host.Status.Attributes, attr)
 		}
 	}
-	applied, overflow, err := selectExtensions(host, list.Items)
+	applied, overflow, invalid, err := selectExtensions(host, list.Items)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", errInvalidExtensionSelector, err)
+	}
+	for _, e := range invalid {
+		logf.FromContext(ctx).Info("host selects an extension whose claimMappings do not compile; ignoring it",
+			"extension", e.Name, "error", e.err.Error())
 	}
 	if len(overflow) > 0 {
 		logf.FromContext(ctx).Info("host selects more extensions than it can apply; ignoring the rest",

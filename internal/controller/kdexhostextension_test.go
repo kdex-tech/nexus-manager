@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kdex-tech/dmapper"
@@ -56,6 +57,9 @@ var _ = Describe("KDexHostExtension validation", func() {
 		Entry("reserved target under scope.", func(e *kdexv1alpha1.KDexHostExtension) { e.Spec.ClaimMappings[0].TargetPropPath = "scope.x" }, "reserved token claim"),
 		Entry("anonymous wildcard name", func(e *kdexv1alpha1.KDexHostExtension) { e.Spec.AnonymousEntitlements = []string{"pages:*:read"} }, "name other than empty or *"),
 		Entry("anonymous empty name", func(e *kdexv1alpha1.KDexHostExtension) { e.Spec.AnonymousEntitlements = []string{"pages::read"} }, "name other than empty or *"),
+		Entry("sourceExpression over 4096 characters", func(e *kdexv1alpha1.KDexHostExtension) {
+			e.Spec.ClaimMappings[0].SourceExpression = "'" + strings.Repeat("a", 4095) + "'"
+		}, "an extension claimMapping sourceExpression must be at most 4096 characters"),
 		Entry("anonymous two segments", func(e *kdexv1alpha1.KDexHostExtension) { e.Spec.AnonymousEntitlements = []string{"pages:read"} }, "name other than empty or *"),
 	)
 
@@ -163,19 +167,51 @@ var _ = Describe("KDexHostExtension status", func() {
 	BeforeEach(func() { hostName = fmt.Sprintf("hx-st-%d", time.Now().UnixNano()) })
 	AfterEach(func() { cleanupResources(namespace) })
 
+	attached := func(name string) *metav1.Condition {
+		e := &kdexv1alpha1.KDexHostExtension{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, e); err != nil {
+			return nil
+		}
+		return meta.FindStatusCondition(e.Status.Conditions, "Attached")
+	}
 	reason := func(name string) func() string {
 		return func() string {
-			e := &kdexv1alpha1.KDexHostExtension{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, e); err != nil {
-				return ""
+			if c := attached(name); c != nil {
+				return c.Reason
 			}
-			c := meta.FindStatusCondition(e.Status.Conditions, "Attached")
-			if c == nil {
-				return ""
-			}
-			return c.Reason
+			return ""
 		}
 	}
+
+	It("excludes an extension whose claimMappings do not compile and reports InvalidClaimMappings", func() {
+		h := &kdexv1alpha1.KDexHost{
+			ObjectMeta: metav1.ObjectMeta{Name: hostName, Namespace: namespace},
+			Spec: kdexv1alpha1.KDexHostSpec{BrandName: "KDex Tech", Organization: "KDex Tech Inc.",
+				Routing:           kdexv1alpha1.Routing{Domains: []string{hostName + ".example.test"}},
+				ExtensionSelector: &metav1.LabelSelector{MatchLabels: eum}},
+		}
+		Expect(k8sClient.Create(ctx, h)).To(Succeed())
+		Expect(k8sClient.Create(ctx, newExtension("valid", hostName, eum, 0))).To(Succeed())
+		bad := newExtension("invalid", hostName, eum, -1)
+		bad.Spec.ClaimMappings[0].SourceExpression = "self.("
+		Expect(k8sClient.Create(ctx, bad)).To(Succeed(), "uncompilable CEL passes the apiserver; nexus must exclude it")
+
+		Eventually(func() []string {
+			ih := &kdexv1alpha1.KDexInternalHost{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: hostName}, ih); err != nil {
+				return nil
+			}
+			out := []string{}
+			for _, e := range ih.Spec.Extensions {
+				out = append(out, e.Name)
+			}
+			return out
+		}, "20s", "500ms").Should(Equal([]string{"valid"}))
+		Eventually(reason("invalid"), "20s", "500ms").Should(Equal("InvalidClaimMappings"))
+		Expect(attached("invalid").Status).To(Equal(metav1.ConditionFalse))
+		Expect(attached("invalid").Message).To(ContainSubstring("Syntax error"))
+		Eventually(reason("valid"), "20s", "500ms").Should(Equal("Attached"))
+	})
 
 	It("reports HostNotFound, NotSelected, then Attached", func() {
 		Expect(k8sClient.Create(ctx, newExtension("st", hostName, eum, 0))).To(Succeed())

@@ -22,6 +22,7 @@ const (
 	extensionReasonNotSelected   = "NotSelected"
 	extensionReasonHostNotFound  = "HostNotFound"
 	extensionReasonLimitExceeded = "LimitExceeded"
+	extensionReasonInvalidClaims = "InvalidClaimMappings"
 )
 
 // KDexHostExtensionReconciler reports, on each KDexHostExtension, whether the
@@ -56,7 +57,8 @@ func (r *KDexHostExtensionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if err := r.List(ctx, siblings, client.InNamespace(host.Namespace), client.MatchingFields{hostIndexKey: host.Name}); err != nil {
 			return ctrl.Result{}, err
 		}
-		applied, overflow, selErr := selectExtensions(host, siblings.Items)
+		applied, overflow, invalid, selErr := selectExtensions(host, siblings.Items)
+		compileErr := invalidErr(invalid, ext.Name)
 		switch {
 		case selErr != nil:
 			reason, message = extensionReasonNotSelected, fmt.Sprintf("KDexHost %q extensionSelector is invalid: %v", host.Name, selErr)
@@ -64,6 +66,8 @@ func (r *KDexHostExtensionReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			status, reason, message = metav1.ConditionTrue, extensionReasonAttached, fmt.Sprintf("applied to KDexHost %q at weight %d", host.Name, ext.Spec.Weight)
 		case containsExtension(overflow, ext.Name):
 			reason, message = extensionReasonLimitExceeded, fmt.Sprintf("KDexHost %q already applies %d extensions", host.Name, maxHostExtensions)
+		case compileErr != nil:
+			reason, message = extensionReasonInvalidClaims, fmt.Sprintf("claimMappings do not compile, so KDexHost %q does not apply this extension: %v", host.Name, compileErr)
 		case host.Spec.ExtensionSelector == nil:
 			reason, message = extensionReasonNotSelected, fmt.Sprintf("KDexHost %q has no extensionSelector", host.Name)
 		default:
@@ -87,6 +91,17 @@ func containsExtension(es []kdexv1alpha1.KDexHostExtension, name string) bool {
 		}
 	}
 	return false
+}
+
+// invalidErr returns the compile error that excluded the named extension, or
+// nil when it is not in invalid.
+func invalidErr(invalid []invalidExtension, name string) error {
+	for _, e := range invalid {
+		if e.Name == name {
+			return e.err
+		}
+	}
+	return nil
 }
 
 // extensionsNaming enqueues every extension in namespace that names host.
