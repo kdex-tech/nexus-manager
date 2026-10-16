@@ -526,6 +526,7 @@ spec:
       /* Consent page: host-manager's kdex-consent-* styling contract */
       .kdex-consent {
         width: 100%;
+        overflow-wrap: anywhere;
         display: flex;
         flex-direction: column;
         gap: 0.75rem;
@@ -538,7 +539,7 @@ spec:
         color: var(--text-muted);
       }
 
-      .kdex-consent strong {
+      .utility-page .kdex-consent strong {
         display: inline;
         margin: 0;
         font-size: inherit;

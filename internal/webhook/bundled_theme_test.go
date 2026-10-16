@@ -51,6 +51,7 @@ func TestBundledThemeCDNStylesheetsArePinnedWithSRI(t *testing.T) {
 
 // consentContractClasses is host-manager's consent block styling contract
 // (kdex-host-manager spec, "Styling contract"): the classes a theme styles.
+// It is a copy across repos: update it whenever that spec section changes.
 var consentContractClasses = []string{
 	"kdex-consent", "kdex-consent-title", "kdex-consent-account",
 	"kdex-consent-destination", "kdex-consent-sends-to", "kdex-consent-where",
@@ -77,5 +78,6 @@ func TestBundledThemeStylesTheConsentContract(t *testing.T) {
 		assert.Regexp(t, `\.`+regexp.QuoteMeta(class)+`[\s,{:\[.>]`, all, "no rule for ."+class)
 	}
 	assert.Contains(t, all, ".kdex-consent-allow[aria-disabled]", "the held Allow looks held")
-	assert.Contains(t, all, ".kdex-consent strong", "inline bold inside the disclosure stays inline")
+	assert.Contains(t, all, ".utility-page .kdex-consent strong", "inline bold inside the disclosure stays inline, outranking .utility-page strong")
+	assert.Contains(t, all, "overflow-wrap: anywhere", "long values wrap inside the card")
 }
