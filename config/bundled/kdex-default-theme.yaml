@@ -11,12 +11,18 @@ spec:
     attributes:
       rel: preconnect
       crossorigin: ""
+  # Google Fonts CSS varies by user agent, so it cannot carry SRI.
   - linkHref: https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;800&family=Fira+Code:wght@400;500&display=swap
     attributes:
       rel: stylesheet
-  - linkHref: https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@latest/build/styles/monokai-sublime.min.css
+  # Pinned with SRI: this theme styles the consent page, whose CSP admits any
+  # https: stylesheet. Bump the version and the integrity together:
+  #   curl -sL <url> | openssl dgst -sha384 -binary | openssl base64 -A
+  - linkHref: https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.12.0/build/styles/monokai-sublime.min.css
     attributes:
       rel: stylesheet
+      integrity: sha384-fPmRQ3GXo2iBk8Sgxizmu0IOOv+vAPjYXqCHNut2KSkSBleqjCd7FpBJwrfyCfGc
+      crossorigin: anonymous
   - style: |
       /* Global Reset & Base Styles */
       :root {
