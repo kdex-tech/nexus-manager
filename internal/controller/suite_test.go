@@ -344,6 +344,7 @@ var _ = BeforeSuite(func() {
 
 	for _, name := range []string{
 		"kdex-default-utility-page-announcement",
+		"kdex-default-utility-page-consent",
 		"kdex-default-utility-page-error",
 		"kdex-default-utility-page-login",
 	} {
@@ -373,6 +374,9 @@ var _ = BeforeSuite(func() {
 		} else if strings.Contains(name, "login") {
 			page.Spec.Type = kdexv1alpha1.LoginUtilityPageType
 			page.Spec.ContentEntries[0].ContentEntryStatic.RawHTML = "<h1>Login</h1>"
+		} else if strings.Contains(name, "consent") {
+			page.Spec.Type = kdexv1alpha1.ConsentUtilityPageType
+			page.Spec.ContentEntries[0].ContentEntryStatic.RawHTML = "[[ .Extra.consent.Block ]]"
 		}
 		_ = k8sClient.Create(ctx, page)
 	}

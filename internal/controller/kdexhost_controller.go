@@ -323,7 +323,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		"Reconciling",
 	)
 
-	utilityPageRefs, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
+	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)
 		if err == nil && r1.RequeueAfter > 0 {
@@ -373,6 +373,12 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			kdexv1alpha1.ConditionReasonReconciling,
 			message,
 		)
+	}
+
+	// A Consent page that does not resolve falls back to host-manager's
+	// built-in consent page; it is recorded like an unresolved optional ref.
+	if consentUnresolved != nil {
+		noteUnresolvedRef(consentUnresolved.message, consentUnresolved.requeue)
 	}
 
 	var themeObj runtime.Object
@@ -702,6 +708,9 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&kdexv1alpha1.KDexClusterUtilityPage{},
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}", "{.Spec.UtilityPages.ConsentRef}")).
+		Watches(
+			&kdexv1alpha1.KDexClusterUtilityPage{},
+			handler.EnqueueRequestsFromMapFunc(r.defaultConsentPageRequests)).
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {

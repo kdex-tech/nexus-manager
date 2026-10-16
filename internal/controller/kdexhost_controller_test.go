@@ -24,6 +24,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -1074,21 +1075,79 @@ var _ = Describe("KDexHost Consent utility page", func() {
 		}, "15s", "500ms").Should(Succeed())
 	})
 
-	It("degrades the host when consentRef names a page of another type", func() {
+	internalConsentPage := func() (*kdexv1alpha1.KDexInternalUtilityPage, error) {
+		page := &kdexv1alpha1.KDexInternalUtilityPage{}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: hostName + "-consent", Namespace: namespace}, page)
+		return page, err
+	}
+
+	// A broken consentRef degrades to host-manager's built-in consent page: the
+	// host is not Degraded, the internal host is still written (with no
+	// consentRef), and the problem is surfaced on the host's conditions.
+	expectProceedsWithoutConsent := func(reason string) {
+		Eventually(func(g Gomega) {
+			internalHost := &kdexv1alpha1.KDexInternalHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, internalHost)).To(Succeed())
+			g.Expect(internalHost.Spec.ConsentRef).To(BeNil())
+			g.Expect(internalHost.Spec.LoginRef).NotTo(BeNil(), "the other utility pages still resolve")
+
+			host := &kdexv1alpha1.KDexHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, host)).To(Succeed())
+			g.Expect(meta.IsStatusConditionTrue(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))).To(BeFalse())
+			cond := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeProgressing))
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Message).To(ContainSubstring("built-in consent page"))
+			g.Expect(cond.Message).To(ContainSubstring(reason))
+			g.Expect(host.Status.Attributes).NotTo(HaveKey("consent.utilitypage.generation"))
+		}, "15s", "500ms").Should(Succeed())
+	}
+
+	It("proceeds with the built-in page when consentRef names a page of another type", func() {
 		page := newPage(hostName+"-login", kdexv1alpha1.LoginUtilityPageType)
 		Expect(k8sClient.Create(ctx, page)).To(Succeed())
 		assertResourceReady(ctx, k8sClient, page.Name, namespace, &kdexv1alpha1.KDexUtilityPage{}, true)
 
 		Expect(k8sClient.Create(ctx, newHost(page.Name))).To(Succeed())
 
+		expectProceedsWithoutConsent("does not match requested type Consent")
+	})
+
+	It("proceeds with the built-in page when consentRef names a missing page", func() {
+		Expect(k8sClient.Create(ctx, newHost("no-such-consent-page"))).To(Succeed())
+
+		expectProceedsWithoutConsent("not found")
+	})
+
+	It("deletes <host>-consent when consentRef stops resolving", func() {
+		page := newPage(hostName+"-page", kdexv1alpha1.ConsentUtilityPageType)
+		Expect(k8sClient.Create(ctx, page)).To(Succeed())
+		assertResourceReady(ctx, k8sClient, page.Name, namespace, &kdexv1alpha1.KDexUtilityPage{}, true)
+		Expect(k8sClient.Create(ctx, newHost(page.Name))).To(Succeed())
+
+		Eventually(func() error {
+			_, err := internalConsentPage()
+			return err
+		}, "15s", "500ms").Should(Succeed())
 		Eventually(func(g Gomega) {
 			host := &kdexv1alpha1.KDexHost{}
 			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, host)).To(Succeed())
-			cond := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
-			g.Expect(cond).NotTo(BeNil())
-			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			g.Expect(cond.Message).To(ContainSubstring("does not match requested type Consent"))
+			g.Expect(host.Status.Attributes).To(HaveKey("consent.utilitypage.generation"))
 		}, "15s", "500ms").Should(Succeed())
+
+		Eventually(func() error {
+			latest := &kdexv1alpha1.KDexHost{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, latest); err != nil {
+				return err
+			}
+			latest.Spec.UtilityPages.ConsentRef = &kdexv1alpha1.KDexObjectReference{Kind: "KDexUtilityPage", Name: "no-such-consent-page"}
+			return k8sClient.Update(ctx, latest)
+		}, "10s").Should(Succeed())
+
+		Eventually(func() bool {
+			p, err := internalConsentPage()
+			return errors.IsNotFound(err) || (err == nil && !p.DeletionTimestamp.IsZero())
+		}, "15s", "500ms").Should(BeTrue(), "the stale internal consent page is deleted")
+		expectProceedsWithoutConsent("not found")
 	})
 
 	It("defaults consentRef to the default cluster consent page", func() {
@@ -1101,6 +1160,53 @@ var _ = Describe("KDexHost Consent utility page", func() {
 		Expect(got.Spec.UtilityPages.ConsentRef).NotTo(BeNil())
 		Expect(got.Spec.UtilityPages.ConsentRef.Kind).To(Equal("KDexClusterUtilityPage"))
 		Expect(got.Spec.UtilityPages.ConsentRef.Name).To(Equal("kdex-default-utility-page-consent"))
+
+		Eventually(func(g Gomega) {
+			page, err := internalConsentPage()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(page.Spec.Type).To(Equal(kdexv1alpha1.ConsentUtilityPageType))
+		}, "15s", "500ms").Should(Succeed())
+	})
+
+	// Hosts created before Consent existed (or while the fail-open defaulter
+	// was unavailable) have no stored consentRef; the controller falls back to
+	// the default cluster consent page for them.
+	It("resolves a stored nil consentRef to the default cluster consent page", func() {
+		restore := bypassHostDefaulter(ctx)
+		defer restore()
+
+		Eventually(func(g Gomega) {
+			host := newHost("")
+			host.Labels = map[string]string{skipHostDefaulterLabel: "true"}
+			host.Spec.UtilityPages = nil
+			// What the defaulter would set and the schema requires.
+			host.Spec.DefaultLang = "en"
+			host.Spec.ModulePolicy = kdexv1alpha1.StrictModulePolicy
+			host.Spec.Routing.Strategy = kdexv1alpha1.IngressRoutingStrategy
+			g.Expect(k8sClient.Create(ctx, host)).To(Succeed())
+
+			got := &kdexv1alpha1.KDexHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, got)).To(Succeed())
+			if got.Spec.UtilityPages != nil && got.Spec.UtilityPages.ConsentRef != nil {
+				// The apiserver had not yet seen the webhook change; try again.
+				_ = k8sClient.Delete(ctx, got)
+				g.Eventually(func() bool {
+					return errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, &kdexv1alpha1.KDexHost{}))
+				}, "10s", "200ms").Should(BeTrue())
+			}
+			g.Expect(got.Spec.UtilityPages).To(BeNil(), "the defaulter was bypassed")
+		}, "30s", "1s").Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			page, err := internalConsentPage()
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(page.Spec.Type).To(Equal(kdexv1alpha1.ConsentUtilityPageType))
+
+			internalHost := &kdexv1alpha1.KDexInternalHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, internalHost)).To(Succeed())
+			g.Expect(internalHost.Spec.ConsentRef).NotTo(BeNil())
+			g.Expect(internalHost.Spec.ConsentRef.Name).To(Equal(hostName + "-consent"))
+		}, "15s", "500ms").Should(Succeed())
 	})
 
 	It("keeps an explicit consentRef", func() {
@@ -1112,3 +1218,42 @@ var _ = Describe("KDexHost Consent utility page", func() {
 		Expect(got.Spec.UtilityPages.ConsentRef.Name).To(Equal("my-consent"))
 	})
 })
+
+// skipHostDefaulterLabel marks a KDexHost the host defaulter must not see, for
+// specs that need a stored object the fail-open defaulter never touched.
+const skipHostDefaulterLabel = "test.kdex.dev/skip-host-defaulter"
+
+// bypassHostDefaulter gives the KDexHost mutating webhook an objectSelector
+// that skips objects labelled skipHostDefaulterLabel, and returns a func that
+// restores the webhook configuration.
+func bypassHostDefaulter(ctx context.Context) func() {
+	const configName = "mutating-webhook-configuration"
+	const webhookName = "mutate.kdexhost.kdex.dev"
+
+	cfg := &admissionregistrationv1.MutatingWebhookConfiguration{}
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configName}, cfg)).To(Succeed())
+	original := cfg.DeepCopy()
+
+	found := false
+	for i := range cfg.Webhooks {
+		if cfg.Webhooks[i].Name == webhookName {
+			cfg.Webhooks[i].ObjectSelector = &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
+				{Key: skipHostDefaulterLabel, Operator: metav1.LabelSelectorOpDoesNotExist},
+			}}
+			found = true
+		}
+	}
+	Expect(found).To(BeTrue(), "the KDexHost defaulter is installed")
+	Expect(k8sClient.Update(ctx, cfg)).To(Succeed())
+
+	return func() {
+		Eventually(func() error {
+			latest := &admissionregistrationv1.MutatingWebhookConfiguration{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: configName}, latest); err != nil {
+				return err
+			}
+			latest.Webhooks = original.Webhooks
+			return k8sClient.Update(ctx, latest)
+		}, "10s").Should(Succeed())
+	}
+}
