@@ -1,0 +1,21 @@
+apiVersion: kdex.dev/v1alpha1
+kind: KDexClusterUtilityPage
+metadata:
+  name: kdex-default-utility-page-consent
+spec:
+  contentEntries:
+  - rawHTML: |
+      <div class="login-container">
+        <strong>[[ l10n .BrandName ]]</strong>
+
+        [[ .Extra.consent.Block ]]
+
+        <div class="footer-organization">
+          <p>[[l10n "announcement.organization" .Organization]]</p>
+        </div>
+      </div>
+    slot: main
+  pageArchetypeRef:
+    kind: KDexClusterPageArchetype
+    name: kdex-default-page-archetype-utility
+  type: Consent

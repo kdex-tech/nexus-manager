@@ -11,6 +11,7 @@ resources:
 - kdex-default-script-library.yaml
 - kdex-default-translation.yaml
 - kdex-default-utility-page-announcement.yaml
+- kdex-default-utility-page-consent.yaml
 - kdex-default-utility-page-error.yaml
 - kdex-default-utility-page-login.yaml
 
