@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -69,6 +70,40 @@ func TestBundledTranslationHasConsentKeys(t *testing.T) {
 				assert.Equal(t, en, v, "%s/%s", lang, key)
 			}
 			assert.Equal(t, strings.Count(en, "%s"), strings.Count(v, "%s"), "%s/%s placeholders", lang, key)
+		}
+	}
+}
+
+// Wording regressions found in review: each disclosure line must read as
+// intended once its arguments are substituted.
+func TestBundledConsentTranslationWording(t *testing.T) {
+	raw, err := os.ReadFile(bundledTranslationPath)
+	require.NoError(t, err)
+
+	var tr kdexv1alpha1.KDexClusterTranslation
+	require.NoError(t, yaml.Unmarshal(raw, &tr))
+	byLang := map[string]map[string]string{}
+	for _, x := range tr.Spec.Translations {
+		byLang[x.Lang] = x.KeysAndValues
+	}
+
+	// ru: "передаст доступ" takes the recipient in the dative, and the
+	// substituted phrase already names the application.
+	ru := byLang["ru"]
+	assert.NotContains(t, ru["consent.device.sends-to"], "приложению %s", "no doubled noun")
+	device := strings.Replace(ru["consent.device.sends-to"], "%s", ru["consent.device.application"], 1)
+	assert.Contains(t, device, "доступ приложению на этом устройстве")
+
+	// de: "Sie kann" reads as the formal "you can"; name the application.
+	for _, key := range []string{"consent.permissions", "consent.permissions-scopes"} {
+		assert.True(t, strings.HasPrefix(byLang["de"][key], "Die Anwendung kann "), "de/%s", key)
+	}
+
+	// it: the existing Italian strings address the user formally (Lei).
+	informal := regexp.MustCompile(`(?i)\b(tuo|tua|tuoi|tue|hai|tu)\b`)
+	for key, v := range byLang["it"] {
+		if strings.HasPrefix(key, "consent.") {
+			assert.False(t, informal.MatchString(v), "it/%s is informal: %q", key, v)
 		}
 	}
 }
