@@ -523,6 +523,123 @@ spec:
         word-break: break-all;
       }
 
+      /* Consent page: host-manager's kdex-consent-* styling contract */
+      .kdex-consent {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        text-align: left;
+      }
+
+      .kdex-consent p {
+        margin: 0;
+        line-height: 1.6;
+        color: var(--text-muted);
+      }
+
+      .kdex-consent strong {
+        display: inline;
+        margin: 0;
+        font-size: inherit;
+        font-weight: 700;
+        color: var(--text-color);
+        text-transform: none;
+        letter-spacing: normal;
+      }
+
+      .utility-page h1.kdex-consent-title {
+        font-size: clamp(1.5rem, 4vw, 2rem);
+        margin-bottom: 0.5rem;
+        text-align: center;
+      }
+
+      .kdex-consent-account {
+        text-align: center;
+      }
+
+      .kdex-consent-destination {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 1rem 1.25rem;
+        border-radius: 1rem;
+        border: 1px solid var(--border-color);
+        background: var(--glass-bg);
+      }
+
+      .kdex-consent-sends-to {
+        font-size: 0.875rem;
+      }
+
+      .kdex-consent .kdex-consent-where {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text-color);
+        word-break: break-all;
+      }
+
+      .kdex-consent-website {
+        font-size: 0.875rem;
+      }
+
+      .kdex-consent .kdex-consent-address {
+        font-family: 'Fira Code', monospace;
+        font-size: 0.75rem;
+        word-break: break-all;
+      }
+
+      .kdex-consent-client,
+      .kdex-consent-permissions {
+        font-size: 0.95rem;
+      }
+
+      .kdex-consent .kdex-consent-warning {
+        padding: 0.75rem 1rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        background: rgba(251, 191, 36, 0.1);
+        color: #fcd34d;
+        font-weight: 600;
+      }
+
+      .kdex-consent-form {
+        width: 100%;
+        margin-top: 0.5rem;
+      }
+
+      .kdex-consent-actions {
+        display: flex;
+        gap: 1rem;
+      }
+
+      .utility-page .kdex-consent-actions button {
+        flex: 1;
+        margin-top: 0;
+      }
+
+      .utility-page .kdex-consent-deny {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border-color);
+        color: var(--text-color);
+      }
+
+      .utility-page .kdex-consent-deny:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .utility-page .kdex-consent-allow {
+        background: var(--primary-gradient);
+        color: white;
+      }
+
+      .utility-page .kdex-consent-allow[aria-disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+        filter: none;
+      }
+
       .code-container {
         position: relative;
         text-align: left;
