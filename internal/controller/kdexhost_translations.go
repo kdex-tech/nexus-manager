@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -169,4 +170,37 @@ func translationHostRefRequests(_ context.Context, obj client.Object) []reconcil
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: t.Namespace, Name: t.Spec.HostRef.Name}}}
+}
+
+// consentKeyPrefix marks the keys that word the OAuth consent disclosure.
+const consentKeyPrefix = "consent."
+
+// withoutConsentKeys returns a copy of spec with every consent.* key removed,
+// and the removed keys as "<lang>/<key>", sorted. spec is not modified.
+//
+// The consent page's wording is part of its disclosure (which button allows,
+// what the warning says), so it is accepted only from kdex-default-translation
+// and the host's own translationRefs. A self-attached translation needs no
+// opt-in from the host owner, so it may not reword the disclosure.
+func withoutConsentKeys(spec kdexv1alpha1.KDexTranslationSpec) (kdexv1alpha1.KDexTranslationSpec, []string) {
+	dropped := []string{}
+	for _, t := range spec.Translations {
+		for k := range t.KeysAndValues {
+			if strings.HasPrefix(k, consentKeyPrefix) {
+				dropped = append(dropped, t.Lang+"/"+k)
+			}
+		}
+	}
+	if len(dropped) == 0 {
+		return spec, dropped
+	}
+	slices.Sort(dropped)
+
+	out := *spec.DeepCopy()
+	for i := range out.Translations {
+		maps.DeleteFunc(out.Translations[i].KeysAndValues, func(k, _ string) bool {
+			return strings.HasPrefix(k, consentKeyPrefix)
+		})
+	}
+	return out, dropped
 }

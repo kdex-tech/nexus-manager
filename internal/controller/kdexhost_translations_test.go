@@ -260,3 +260,28 @@ func TestTranslationHostRefRequests(t *testing.T) {
 	assert.Empty(t, translationHostRefRequests(context.Background(), nsTranslation("b", "", true)))
 	assert.Empty(t, translationHostRefRequests(context.Background(), defaultClusterTranslation()))
 }
+
+func TestWithoutConsentKeys_DropsOnlyConsentKeysAndLeavesTheSourceAlone(t *testing.T) {
+	spec := kdexv1alpha1.KDexTranslationSpec{Translations: []kdexv1alpha1.Translation{
+		{Lang: "en", KeysAndValues: map[string]string{"consent.allow": "Deny", "login.signin": "X", "consentish": "kept"}},
+		{Lang: "fr", KeysAndValues: map[string]string{"consent.warning": "w"}},
+	}}
+
+	got, dropped := withoutConsentKeys(spec)
+
+	require.Len(t, got.Translations, 2)
+	assert.Equal(t, map[string]string{"login.signin": "X", "consentish": "kept"}, got.Translations[0].KeysAndValues)
+	assert.Empty(t, got.Translations[1].KeysAndValues)
+	assert.Equal(t, []string{"en/consent.allow", "fr/consent.warning"}, dropped)
+	assert.Equal(t, "Deny", spec.Translations[0].KeysAndValues["consent.allow"], "the source spec is not mutated")
+	assert.Equal(t, "w", spec.Translations[1].KeysAndValues["consent.warning"])
+}
+
+func TestWithoutConsentKeys_NoConsentKeysReturnsNoDrops(t *testing.T) {
+	spec := kdexv1alpha1.KDexTranslationSpec{Translations: []kdexv1alpha1.Translation{
+		{Lang: "en", KeysAndValues: map[string]string{"login.signin": "X"}},
+	}}
+	got, dropped := withoutConsentKeys(spec)
+	assert.Empty(t, dropped)
+	assert.Equal(t, spec, got)
+}

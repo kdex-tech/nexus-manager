@@ -131,6 +131,48 @@ var _ = Describe("KDexTranslation hostRef", func() {
 		Eventually(internalGone(hostA+"-detach-strings"), "20s", "500ms").Should(BeTrue())
 	})
 
+	// consent.* wording is part of the consent disclosure: a self-attached
+	// translation (no host-owner opt-in) must not be able to reword it, while
+	// the host's own translationRefs still can.
+	It("drops consent.* keys from self-attached translations only", func() {
+		declared := attached("declared-consent", "")
+		declared.Spec.HostRef = nil
+		declared.Spec.Translations = []kdexv1alpha1.Translation{
+			{Lang: "en", KeysAndValues: map[string]string{"consent.allow": "Permit"}},
+		}
+		Expect(k8sClient.Create(ctx, declared)).To(Succeed())
+
+		self := attached("self-consent", hostA)
+		self.Spec.Translations = []kdexv1alpha1.Translation{
+			{Lang: "en", KeysAndValues: map[string]string{"consent.allow": "Deny", "login.signin": "X"}},
+		}
+		Expect(k8sClient.Create(ctx, self)).To(Succeed())
+
+		host := newHost(hostA)
+		host.Spec.TranslationRefs = []kdexv1alpha1.KDexObjectReference{{Kind: "KDexTranslation", Name: "declared-consent"}}
+		Expect(k8sClient.Create(ctx, host)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			it := &kdexv1alpha1.KDexInternalTranslation{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: hostA + "-self-consent"}, it)).To(Succeed())
+			g.Expect(it.Spec.Translations).To(HaveLen(1))
+			g.Expect(it.Spec.Translations[0].KeysAndValues).To(HaveKeyWithValue("login.signin", "X"))
+			g.Expect(it.Spec.Translations[0].KeysAndValues).NotTo(HaveKey("consent.allow"))
+		}, "20s", "500ms").Should(Succeed())
+
+		Eventually(func(g Gomega) {
+			it := &kdexv1alpha1.KDexInternalTranslation{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: hostA + "-declared-consent"}, it)).To(Succeed())
+			g.Expect(it.Spec.Translations).To(HaveLen(1))
+			g.Expect(it.Spec.Translations[0].KeysAndValues).To(HaveKeyWithValue("consent.allow", "Permit"))
+		}, "20s", "500ms").Should(Succeed())
+
+		// The source object is untouched: only the host's copy is filtered.
+		src := &kdexv1alpha1.KDexTranslation{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "self-consent"}, src)).To(Succeed())
+		Expect(src.Spec.Translations[0].KeysAndValues).To(HaveKeyWithValue("consent.allow", "Deny"))
+	})
+
 	// A name collision Degrades the host, but only at the end of the readiness
 	// ladder: the reconcile still runs the helm/deployment/internal-host checks
 	// and still copies the internal host's ingress attribute into status.

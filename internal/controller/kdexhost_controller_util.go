@@ -249,6 +249,26 @@ func (r *KDexHostReconciler) resolveTranslations(
 		}
 	}
 
+	// consent.* is accepted only from the default and the host's own
+	// translationRefs. A translation that is also host-declared keeps its
+	// declared position (and its keys) in orderTranslationSources.
+	declaredKeys := make(map[string]bool, len(declared))
+	for _, s := range declared {
+		declaredKeys[s.key()] = true
+	}
+	for i := range selfAttached {
+		if declaredKeys[selfAttached[i].key()] {
+			continue
+		}
+		spec, dropped := withoutConsentKeys(selfAttached[i].Spec)
+		if len(dropped) > 0 {
+			selfAttached[i].Spec = spec
+			logf.FromContext(ctx).WithName("translation").V(1).Info(
+				"ignoring consent.* keys in a self-attached translation; set them through the host's translationRefs",
+				"translation", selfAttached[i].key(), "keys", dropped)
+		}
+	}
+
 	ordered, collision := orderTranslationSources(defaultSrc, selfAttached, declared)
 
 	refs := make([]corev1.LocalObjectReference, 0, len(ordered))
