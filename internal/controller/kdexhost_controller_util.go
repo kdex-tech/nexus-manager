@@ -272,35 +272,45 @@ func (r *KDexHostReconciler) resolveTranslations(
 	return refs, collision, false, ctrl.Result{}, nil
 }
 
+// utilityPageTypes is the single list of utility page types a host resolves.
+var utilityPageTypes = []kdexv1alpha1.KDexUtilityPageType{
+	kdexv1alpha1.AnnouncementUtilityPageType,
+	kdexv1alpha1.ConsentUtilityPageType,
+	kdexv1alpha1.ErrorUtilityPageType,
+	kdexv1alpha1.LoginUtilityPageType,
+}
+
+// utilityPageRef returns the host's reference for the given utility page type.
+func utilityPageRef(host *kdexv1alpha1.KDexHost, pageType kdexv1alpha1.KDexUtilityPageType) *kdexv1alpha1.KDexObjectReference {
+	if host.Spec.UtilityPages == nil {
+		return nil
+	}
+	switch pageType {
+	case kdexv1alpha1.AnnouncementUtilityPageType:
+		return host.Spec.UtilityPages.AnnouncementRef
+	case kdexv1alpha1.ConsentUtilityPageType:
+		return host.Spec.UtilityPages.ConsentRef
+	case kdexv1alpha1.ErrorUtilityPageType:
+		return host.Spec.UtilityPages.ErrorRef
+	case kdexv1alpha1.LoginUtilityPageType:
+		return host.Spec.UtilityPages.LoginRef
+	}
+	return nil
+}
+
 //nolint:gocyclo
 func (r *KDexHostReconciler) resolveUtilityPages(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-) (*corev1.LocalObjectReference, *corev1.LocalObjectReference, *corev1.LocalObjectReference, bool, ctrl.Result, error) {
+) (map[kdexv1alpha1.KDexUtilityPageType]*corev1.LocalObjectReference, bool, ctrl.Result, error) {
 	refs := map[kdexv1alpha1.KDexUtilityPageType]*corev1.LocalObjectReference{}
 
-	types := []kdexv1alpha1.KDexUtilityPageType{
-		kdexv1alpha1.AnnouncementUtilityPageType,
-		kdexv1alpha1.ErrorUtilityPageType,
-		kdexv1alpha1.LoginUtilityPageType,
-	}
-
-	for _, pageType := range types {
-		var ref *kdexv1alpha1.KDexObjectReference
-		if host.Spec.UtilityPages != nil {
-			switch pageType {
-			case kdexv1alpha1.AnnouncementUtilityPageType:
-				ref = host.Spec.UtilityPages.AnnouncementRef
-			case kdexv1alpha1.ErrorUtilityPageType:
-				ref = host.Spec.UtilityPages.ErrorRef
-			case kdexv1alpha1.LoginUtilityPageType:
-				ref = host.Spec.UtilityPages.LoginRef
-			}
-		}
+	for _, pageType := range utilityPageTypes {
+		ref := utilityPageRef(host, pageType)
 
 		resolvedObj, shouldReturn, r1, err := ResolveKDexObjectReference(ctx, r.Client, host, &host.Status.Conditions, ref, r.RequeueDelay)
 		if shouldReturn && !isDefaultUtilityPage(ref) {
-			return nil, nil, nil, true, r1, err
+			return nil, true, r1, err
 		}
 
 		if resolvedObj != nil {
@@ -314,12 +324,12 @@ func (r *KDexHostReconciler) resolveUtilityPages(
 
 			// Validate Type matches
 			if spec.Type != pageType {
-				return nil, nil, nil, true, ctrl.Result{}, fmt.Errorf("utility page type %s does not match requested type %s", spec.Type, pageType)
+				return nil, true, ctrl.Result{}, fmt.Errorf("utility page type %s does not match requested type %s", spec.Type, pageType)
 			}
 
 			internalRef, err := r.createOrUpdateInternalUtilityPage(ctx, host, spec, pageType, resolvedObj.GetGeneration())
 			if err != nil {
-				return nil, nil, nil, true, ctrl.Result{}, err
+				return nil, true, ctrl.Result{}, err
 			}
 			refs[pageType] = internalRef
 
@@ -330,11 +340,12 @@ func (r *KDexHostReconciler) resolveUtilityPages(
 		}
 	}
 
-	return refs[kdexv1alpha1.AnnouncementUtilityPageType], refs[kdexv1alpha1.ErrorUtilityPageType], refs[kdexv1alpha1.LoginUtilityPageType], false, ctrl.Result{}, nil
+	return refs, false, ctrl.Result{}, nil
 }
 
 func isDefaultUtilityPage(ref *kdexv1alpha1.KDexObjectReference) bool {
 	return ref.Name == webhook.KDexDefaultUtilityPageAnnouncement ||
+		ref.Name == webhook.KDexDefaultUtilityPageConsent ||
 		ref.Name == webhook.KDexDefaultUtilityPageError ||
 		ref.Name == webhook.KDexDefaultUtilityPageLogin
 }

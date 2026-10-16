@@ -56,7 +56,7 @@ var _ = Describe("KDexUtilityPage Controller", func() {
 
 			err := k8sClient.Create(ctx, utilityPage)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`supported values: "Announcement", "Error", "Login"`))
+			Expect(err.Error()).To(ContainSubstring(`supported values: "Announcement", "Consent", "Error", "Login"`))
 		})
 
 		It("should not validate without content entries", func() {

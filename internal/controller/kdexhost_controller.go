@@ -323,7 +323,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		"Reconciling",
 	)
 
-	announcementRef, errorRef, loginRef, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
+	utilityPageRefs, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)
 		if err == nil && r1.RequeueAfter > 0 {
@@ -483,7 +483,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// which is especially important for tests that monitor these attributes.
 	var internalHostOp controllerutil.OperationResult
 	var internalHost *kdexv1alpha1.KDexInternalHost
-	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, announcementRef, errorRef, loginRef, translationRefs, extensions)
+	internalHostOp, internalHost, err = r.createOrUpdateInternalHostResource(ctx, &host, utilityPageRefs, translationRefs, extensions)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -698,10 +698,10 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.TranslationRefs[*]}")).
 		Watches(
 			&kdexv1alpha1.KDexUtilityPage{},
-			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}")).
+			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}", "{.Spec.UtilityPages.ConsentRef}")).
 		Watches(
 			&kdexv1alpha1.KDexClusterUtilityPage{},
-			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}")).
+			MakeHandlerByReferencePath(r.Client, r.Scheme, &kdexv1alpha1.KDexHost{}, &kdexv1alpha1.KDexHostList{}, "{.Spec.UtilityPages.AnnouncementRef}", "{.Spec.UtilityPages.ErrorRef}", "{.Spec.UtilityPages.LoginRef}", "{.Spec.UtilityPages.ConsentRef}")).
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -748,9 +748,7 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	ctx context.Context,
 	host *kdexv1alpha1.KDexHost,
-	announcementRef *corev1.LocalObjectReference,
-	errorRef *corev1.LocalObjectReference,
-	loginRef *corev1.LocalObjectReference,
+	utilityPageRefs map[kdexv1alpha1.KDexUtilityPageType]*corev1.LocalObjectReference,
 	translationRefs []corev1.LocalObjectReference,
 	extensions []kdexv1alpha1.InternalHostExtension,
 ) (controllerutil.OperationResult, *kdexv1alpha1.KDexInternalHost, error) {
@@ -794,9 +792,10 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 		}
 		internalHost.Labels["kdex.dev/generation"] = fmt.Sprintf("%d", host.Generation)
 		internalHost.Spec.KDexHostSpec = host.Spec
-		internalHost.Spec.AnnouncementRef = announcementRef
-		internalHost.Spec.ErrorRef = errorRef
-		internalHost.Spec.LoginRef = loginRef
+		internalHost.Spec.AnnouncementRef = utilityPageRefs[kdexv1alpha1.AnnouncementUtilityPageType]
+		internalHost.Spec.ConsentRef = utilityPageRefs[kdexv1alpha1.ConsentUtilityPageType]
+		internalHost.Spec.ErrorRef = utilityPageRefs[kdexv1alpha1.ErrorUtilityPageType]
+		internalHost.Spec.LoginRef = utilityPageRefs[kdexv1alpha1.LoginUtilityPageType]
 		internalHost.Spec.InternalTranslationRefs = translationRefs
 		internalHost.Spec.Extensions = extensions
 
@@ -809,9 +808,7 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 		"createOrUpdateInternalHostResource",
 		"name", internalHost.Name,
 		"op", op,
-		"announcementRef", announcementRef,
-		"errorRef", errorRef,
-		"loginRef", loginRef,
+		"utilityPageRefs", utilityPageRefs,
 		"translationRefs", translationRefs,
 		"err", err,
 	)

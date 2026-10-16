@@ -1013,3 +1013,102 @@ var _ = Describe("KDexHost Controller", func() {
 		})
 	})
 })
+
+var _ = Describe("KDexHost Consent utility page", func() {
+	ctx := context.Background()
+	var hostName string
+
+	BeforeEach(func() {
+		hostName = fmt.Sprintf("consent-host-%d", time.Now().UnixNano())
+	})
+
+	AfterEach(func() {
+		cleanupResources(namespace)
+	})
+
+	newPage := func(name string, pageType kdexv1alpha1.KDexUtilityPageType) *kdexv1alpha1.KDexUtilityPage {
+		return &kdexv1alpha1.KDexUtilityPage{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: kdexv1alpha1.KDexUtilityPageSpec{
+				ContentEntries: []kdexv1alpha1.ContentEntry{{
+					Slot:               "main",
+					ContentEntryStatic: kdexv1alpha1.ContentEntryStatic{RawHTML: "<p>x</p>"},
+				}},
+				Type: pageType,
+			},
+		}
+	}
+
+	newHost := func(consentPage string) *kdexv1alpha1.KDexHost {
+		return &kdexv1alpha1.KDexHost{
+			ObjectMeta: metav1.ObjectMeta{Name: hostName, Namespace: namespace},
+			Spec: kdexv1alpha1.KDexHostSpec{
+				BrandName:    "KDex Tech",
+				Organization: "KDex Tech Inc.",
+				Routing:      kdexv1alpha1.Routing{Domains: []string{"kdex.dev"}},
+				UtilityPages: &kdexv1alpha1.UtilityPages{
+					ConsentRef: &kdexv1alpha1.KDexObjectReference{Kind: "KDexUtilityPage", Name: consentPage},
+				},
+			},
+		}
+	}
+
+	It("resolves consentRef into <host>-consent and the internal host ref", func() {
+		page := newPage(hostName+"-page", kdexv1alpha1.ConsentUtilityPageType)
+		Expect(k8sClient.Create(ctx, page)).To(Succeed())
+		assertResourceReady(ctx, k8sClient, page.Name, namespace, &kdexv1alpha1.KDexUtilityPage{}, true)
+
+		Expect(k8sClient.Create(ctx, newHost(page.Name))).To(Succeed())
+
+		internalPage := &kdexv1alpha1.KDexInternalUtilityPage{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: hostName + "-consent", Namespace: namespace}, internalPage)
+		}, "15s", "500ms").Should(Succeed())
+		Expect(internalPage.Spec.Type).To(Equal(kdexv1alpha1.ConsentUtilityPageType))
+
+		Eventually(func(g Gomega) {
+			internalHost := &kdexv1alpha1.KDexInternalHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, internalHost)).To(Succeed())
+			g.Expect(internalHost.Spec.ConsentRef).NotTo(BeNil())
+			g.Expect(internalHost.Spec.ConsentRef.Name).To(Equal(hostName + "-consent"))
+		}, "15s", "500ms").Should(Succeed())
+	})
+
+	It("degrades the host when consentRef names a page of another type", func() {
+		page := newPage(hostName+"-login", kdexv1alpha1.LoginUtilityPageType)
+		Expect(k8sClient.Create(ctx, page)).To(Succeed())
+		assertResourceReady(ctx, k8sClient, page.Name, namespace, &kdexv1alpha1.KDexUtilityPage{}, true)
+
+		Expect(k8sClient.Create(ctx, newHost(page.Name))).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			host := &kdexv1alpha1.KDexHost{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, host)).To(Succeed())
+			cond := meta.FindStatusCondition(host.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
+			g.Expect(cond).NotTo(BeNil())
+			g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			g.Expect(cond.Message).To(ContainSubstring("does not match requested type Consent"))
+		}, "15s", "500ms").Should(Succeed())
+	})
+
+	It("defaults consentRef to the default cluster consent page", func() {
+		host := newHost("")
+		host.Spec.UtilityPages = nil
+		Expect(k8sClient.Create(ctx, host)).To(Succeed())
+
+		got := &kdexv1alpha1.KDexHost{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, got)).To(Succeed())
+		Expect(got.Spec.UtilityPages.ConsentRef).NotTo(BeNil())
+		Expect(got.Spec.UtilityPages.ConsentRef.Kind).To(Equal("KDexClusterUtilityPage"))
+		Expect(got.Spec.UtilityPages.ConsentRef.Name).To(Equal("kdex-default-utility-page-consent"))
+	})
+
+	It("keeps an explicit consentRef", func() {
+		Expect(k8sClient.Create(ctx, newHost("my-consent"))).To(Succeed())
+
+		got := &kdexv1alpha1.KDexHost{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: hostName, Namespace: namespace}, got)).To(Succeed())
+		Expect(got.Spec.UtilityPages.ConsentRef.Kind).To(Equal("KDexUtilityPage"))
+		Expect(got.Spec.UtilityPages.ConsentRef.Name).To(Equal("my-consent"))
+	})
+})

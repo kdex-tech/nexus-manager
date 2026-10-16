@@ -19,6 +19,7 @@ const (
 	KDexTheme                 = "KDexTheme"
 
 	KDexDefaultUtilityPageAnnouncement = "kdex-default-utility-page-announcement"
+	KDexDefaultUtilityPageConsent      = "kdex-default-utility-page-consent"
 	KDexDefaultUtilityPageError        = "kdex-default-utility-page-error"
 	KDexDefaultUtilityPageLogin        = "kdex-default-utility-page-login"
 )

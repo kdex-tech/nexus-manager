@@ -92,6 +92,16 @@ func (a *KDexHostDefaulter[T]) Default(ctx context.Context, obj T) error {
 		spec.UtilityPages.LoginRef.Name = "kdex-default-utility-page-login"
 	}
 
+	if spec.UtilityPages.ConsentRef == nil {
+		spec.UtilityPages.ConsentRef = &kdexv1alpha1.KDexObjectReference{}
+	}
+	if spec.UtilityPages.ConsentRef.Kind == "" {
+		spec.UtilityPages.ConsentRef.Kind = KDexClusterUtilityPage
+	}
+	if spec.UtilityPages.ConsentRef.Name == "" {
+		spec.UtilityPages.ConsentRef.Name = KDexDefaultUtilityPageConsent
+	}
+
 	spec.IngressPath = "/-/host"
 
 	BackendDefaults(&spec.Backend)
