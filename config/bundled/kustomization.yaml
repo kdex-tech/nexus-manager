@@ -1,5 +1,4 @@
 resources:
-- kdex-default-faas-adaptor-knative.yaml
 - kdex-default-page-archetype-standard.yaml
 - kdex-default-page-archetype-utility.yaml
 - kdex-default-page-footer.yaml
