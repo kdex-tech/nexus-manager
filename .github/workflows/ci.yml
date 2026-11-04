@@ -46,6 +46,12 @@ jobs:
         go mod tidy
         make test
 
+    - name: Build the kustomize overlays
+      # Catches a kustomization that lists a missing file (#60): the chart
+      # copies config/bundled by glob and never reads the kustomization.
+      run: |
+        make verify-kustomize
+
   test-chart:
     name: Test Chart
     needs: ci

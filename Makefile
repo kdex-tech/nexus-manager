@@ -184,6 +184,11 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${REPOSITORY}${IMG}${TAG} --tag ${REPOSITORY}${IMG}:latest -f Dockerfile.cross .
 	rm Dockerfile.cross
 
+.PHONY: verify-kustomize
+verify-kustomize: kustomize ## Build every kustomize overlay, failing on a missing resource.
+	$(KUSTOMIZE) build config/default > /dev/null
+	$(KUSTOMIZE) build config/bundled > /dev/null
+
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
