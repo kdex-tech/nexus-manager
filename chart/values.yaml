@@ -35,7 +35,8 @@ config:
     # fetch is reported as a warning instead of passing by unnoticed. The
     # npm-vs-bun registry-resolution mismatch that left @kdex-tech/ui
     # `unverified` on every run is fixed here, not by the claim.
-    toolsImage: ghcr.io/kdex-tech/node-tools:0.4.1
+    # 0.4.2 runs no package lifecycle scripts (host-manager#290).
+    toolsImage: ghcr.io/kdex-tech/node-tools:0.4.2
     toolsImagePullPolicy: IfNotPresent
     # Packaging-pipeline knobs (node-tools >= 0.3.0, kdex-tech/node-tools#3).
     # Empty = image defaults (npm + node), byte-identical to prior behavior.

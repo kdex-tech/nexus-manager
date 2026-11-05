@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -154,13 +155,5 @@ func TestHostManagerChartSpec_CarriesReferenceNamespaces(t *testing.T) {
 
 func equalAny(got any, want []any) bool {
 	list, ok := got.([]any)
-	if !ok || len(list) != len(want) {
-		return false
-	}
-	for i := range list {
-		if list[i] != want[i] {
-			return false
-		}
-	}
-	return true
+	return ok && slices.Equal(list, want)
 }
