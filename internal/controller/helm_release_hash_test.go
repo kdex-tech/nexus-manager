@@ -118,3 +118,49 @@ func TestHelmReleaseHash_ChangesWithNexusConfiguration(t *testing.T) {
 		t.Error("hash did not change when the cluster-wide NexusConfiguration changed")
 	}
 }
+
+// spec.referenceNamespaces reaches host-manager as a chart value, so changing
+// it must re-render (and roll host-manager, whose cache namespaces are fixed
+// at startup). A per-host values override cannot widen it. host-manager#290.
+func TestHostManagerChartSpec_CarriesReferenceNamespaces(t *testing.T) {
+	r := hashReconciler(t)
+
+	before := baseHost()
+	after := baseHost()
+	after.Spec.ReferenceNamespaces = []string{"shared"}
+	after.Spec.Helm = &kdexv1alpha1.HelmConfig{
+		HostManager: &kdexv1alpha1.HostManagerHelmConfig{Values: "referenceNamespaces: [everything]\n"},
+	}
+
+	spec, err := r.buildHostManagerChartSpec(after)
+	if err != nil {
+		t.Fatalf("buildHostManagerChartSpec: %v", err)
+	}
+	if got, want := spec.Values["referenceNamespaces"], []any{"shared"}; !equalAny(got, want) {
+		t.Errorf("referenceNamespaces = %v, want %v (the host spec wins over a values override)", got, want)
+	}
+
+	plain, err := r.buildHostManagerChartSpec(before)
+	if err != nil {
+		t.Fatalf("buildHostManagerChartSpec: %v", err)
+	}
+	if got := plain.Values["referenceNamespaces"]; !equalAny(got, []any{}) {
+		t.Errorf("default referenceNamespaces = %v, want empty (the host's own namespace only)", got)
+	}
+	if mustHash(t, r, after) == mustHash(t, r, before) {
+		t.Error("hash did not change when spec.referenceNamespaces changed")
+	}
+}
+
+func equalAny(got any, want []any) bool {
+	list, ok := got.([]any)
+	if !ok || len(list) != len(want) {
+		return false
+	}
+	for i := range list {
+		if list[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

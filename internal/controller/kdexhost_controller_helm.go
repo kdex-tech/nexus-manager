@@ -612,6 +612,16 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 	vals["focalHost"] = host.Name
 	vals["fullnameOverride"] = host.Name
 
+	// The namespaces host-manager caches, watches and resolves references in,
+	// besides the host's own (host-manager#290). Always set, so a per-host
+	// values override can't widen them; changing the list rolls host-manager,
+	// whose cache namespaces are fixed at startup.
+	referenceNamespaces := make([]any, 0, len(host.Spec.ReferenceNamespaces))
+	for _, ns := range host.Spec.ReferenceNamespaces {
+		referenceNamespaces = append(referenceNamespaces, ns)
+	}
+	vals["referenceNamespaces"] = referenceNamespaces
+
 	hostManagerClusterRole := os.Getenv("HOST_MANAGER_CLUSTER_ROLE")
 
 	roleRef := map[string]string{}
