@@ -70,9 +70,9 @@ const (
 	// public chart is under 1MiB compressed. The manager's
 	// --registry-fetch-max-bytes sets it; raising it needs the memory limit
 	// raised to match. Separately, oras-go v2.7.0 preallocates up to 32MiB
-	// for a blob from the size its manifest declares, before reading a byte
-	// this budget counts; a forged size costs that much transiently, then
-	// fails.
+	// per blob from the size its manifest declares, before reading a byte
+	// this budget counts, and copies up to three blobs at once: forged sizes
+	// cost up to ~96MiB transiently, then fail.
 	RegistryFetchMaxBytes = 4 << 20
 
 	// ChartFetchTimeout bounds every request to a chart registry, as Helm's
@@ -385,9 +385,9 @@ var defaultRegistryFetchLimits = registryFetchLimits{
 // (v2.7.0 here, the latest) caps neither: Repository.TagListMaxPages exists
 // but defaults to no cap and Helm, which builds the Repository, does not set
 // it, and MaxMetadataBytes bounds a single page only. No upgrade of either
-// bounds the listing. Hence a budget for the
-// whole fetch on the transport. Delete it once Helm gives a registry client a
-// timeout and a bounded tag listing.
+// bounds the listing. Hence a budget for the whole fetch on the transport.
+// Delete it once Helm gives a registry client a timeout and a bounded tag
+// listing.
 func registryClientOptions(chartName string, secrets kdexv1alpha1.Secrets, debug bool, limits registryFetchLimits) ([]registry.ClientOption, error) {
 	options := []registry.ClientOption{
 		registry.ClientOptDebug(debug),
@@ -436,9 +436,10 @@ func registryClientOptions(chartName string, secrets kdexv1alpha1.Secrets, debug
 		// A plainHTTP registry also gets TLS unverified, for a registry that
 		// redirects to https. Either setting applies to every request to the
 		// registry, the credentialed ones included. oras-go v2.7.0 drops
-		// credentials on a redirect to another origin (port included), so a
-		// credentialed plainHTTP registry may redirect only http:80 to
-		// https:443 on the same host.
+		// the Authorization header on any cross-origin hop (scheme or port
+		// included) and re-authenticates only after a same-host http:80 to
+		// https:443 upgrade, so a credentialed plainHTTP registry may
+		// redirect only that way.
 		insecure = string(match.Data["plainHTTP"]) == trueVal || string(match.Data["insecure"]) == trueVal
 
 		if len(match.Data["username"]) > 0 && len(match.Data["password"]) > 0 {
@@ -618,9 +619,9 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 		client.Version = spec.Version
 	}
 
-	// Locate the chart. LocateChart re-downloads the archive on every call, and
-	// the chart is identical across hosts, so an exact version's located path
-	// is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
+	// Locate the chart. LocateChart re-downloads the archive on every call,
+	// and the chart is identical across hosts, so an exact version's located
+	// path is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
 	// chart while rendering, so each render needs its own copy.
 	cp, err := h.locateChart(spec, func() (string, error) {
 		return client.LocateChart(spec.ChartName, h.settings)
@@ -684,9 +685,9 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 		client.Version = spec.Version
 	}
 
-	// Locate the chart. LocateChart re-downloads the archive on every call, and
-	// the chart is identical across hosts, so an exact version's located path
-	// is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
+	// Locate the chart. LocateChart re-downloads the archive on every call,
+	// and the chart is identical across hosts, so an exact version's located
+	// path is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
 	// chart while rendering, so each render needs its own copy.
 	cp, err := h.locateChart(spec, func() (string, error) {
 		return client.LocateChart(spec.ChartName, h.settings)
