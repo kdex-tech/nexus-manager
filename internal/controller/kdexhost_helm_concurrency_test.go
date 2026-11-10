@@ -146,7 +146,7 @@ func (m *pruneTrackingHelmClient) InstallOrUpgrade(_ *utils.ChartSpec) error {
 	return nil
 }
 
-// One owned release, never declared by any host, so every prune uninstalls it.
+// One owned release, never declared by any host.
 func (m *pruneTrackingHelmClient) ListReleases(map[string]string) ([]string, error) {
 	return []string{"orphaned-companion"}, nil
 }
@@ -188,6 +188,10 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 				BrandName:    "KDex Tech",
 				Organization: "KDex Tech Inc.",
 				ModulePolicy: kdexv1alpha1.LooseModulePolicy,
+			},
+			// The operator installed it, so every prune uninstalls it.
+			Status: kdexv1alpha1.KDexObjectStatus{
+				Attributes: map[string]string{AttributeCompanionReleases: "orphaned-companion"},
 			},
 		})
 	}

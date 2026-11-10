@@ -216,9 +216,18 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 	return sharedChartPaths.get(key, load)
 }
 
-// Uninstall uninstalls a Helm release.
+// Uninstall uninstalls a Helm release, running none of its hooks.
+//
+// Helm keeps a release's record -- hooks included -- in a Secret in the
+// release's namespace, so whoever can write Secrets there can forge the record.
+// Uninstall acts as the operator, whose RBAC reaches cluster-scoped resources,
+// so running a release's delete hooks would create whatever the last writer of
+// that Secret put in them. None of the releases this operator manages (the
+// host-manager chart, the companion charts) relies on a delete hook.
+// See kdex-tech/nexus-manager#46.
 func (h *HelmClient) Uninstall(releaseName string) error {
 	client := action.NewUninstall(h.actionConfig)
+	client.DisableHooks = true
 	client.Timeout = 5 * time.Minute
 	client.DeletionPropagation = "foreground"
 	client.WaitStrategy = kube.StatusWatcherStrategy

@@ -275,7 +275,11 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// Uninstall companion charts: everything this host owns, not only
 			// what it still declares, so a companion dropped in the same edit
 			// that deleted the host cannot outlive the CR.
-			if err := r.uninstallCompanionCharts(c, &host, log); err != nil {
+			hostReleases, err := r.kdexHostNames(ctx, host.Namespace)
+			if err == nil {
+				err = r.uninstallCompanionCharts(c, &host, hostReleases, log)
+			}
+			if err != nil {
 				log.Error(err, "failed to uninstall companion releases", "host", host.Name)
 				uninstallErrs = append(uninstallErrs, err)
 			}

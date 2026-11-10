@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,16 +37,25 @@ const (
 	AttributeHelmReleaseError       = "helm.release.error"
 	AttributeHelmReleaseOwner       = "helm.release.owner"
 	AttributeHelmReleaseLastAttempt = "helm.release.last-attempt"
+	// AttributeCompanionReleases records, comma-separated and sorted, every
+	// companion release this operator has installed (or is about to: a name
+	// is recorded before its install) for the host and not removed since. It lives in status, which only the operator writes, and
+	// is the authority for what a prune or a teardown may uninstall. It
+	// carries the helm.release. prefix because the async helm operation
+	// writes it: the reconcile's own status patch preserves exactly those
+	// keys from the server rather than overwriting them with its snapshot.
+	AttributeCompanionReleases = "helm.release.companions"
 
 	HelmStatusInProgress = "in_progress"
 	HelmStatusCompleted  = "completed"
 	HelmStatusFailed     = "failed"
 
 	// LabelCompanionOf marks a Helm release as a companion chart installed by
-	// this operator on behalf of the named KDexHost. Pruning is driven by
-	// discovery through this label rather than by remembered state, so it
-	// still works after a status reset and cannot be defeated by editing the
-	// CR — the two ways a spec-only diff loses track of a release.
+	// this operator on behalf of the named KDexHost. Helm keeps the label on
+	// the release's record Secret, which anyone able to write Secrets in the
+	// namespace can set, so it only ever narrows: a release is this host's to
+	// prune or uninstall when it carries the label AND the operator recorded
+	// installing it (AttributeCompanionReleases). See #46.
 	LabelCompanionOf = "kdex.dev/companion-of"
 )
 
@@ -325,6 +337,12 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		"Helm installation in progress",
 	)
 
+	// The companion record is the helm operation's to write, and this host's
+	// snapshot may predate the last one: carry the server's forward (#46).
+	if rec, ok := latestHost.Status.Attributes[AttributeCompanionReleases]; ok {
+		host.Status.Attributes[AttributeCompanionReleases] = rec
+	}
+
 	// We need to update the status now before starting the goroutine.
 	// We use Patch to avoid conflicts with the defer block.
 	patch := client.MergeFrom(latestHost.DeepCopy())
@@ -398,7 +416,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	if r.HelmClientFactory == nil {
 		err := fmt.Errorf("HelmClientFactory is nil")
 		log.Error(err, "controller misconfigured")
-		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
 		return
 	}
 
@@ -443,21 +461,40 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		log.WithName("helm"),
 	)
 	if err != nil {
-		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
 		return
 	}
 
 	// 1. Reconcile kdex-host-manager chart
 	if err := r.reconcileHostManagerChart(c, host); err != nil {
-		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
 		return
 	}
 
-	// 2. Reconcile companion charts
+	// 2. Reconcile companion charts. None may take a KDexHost's name: a host's
+	// own release carries it, so the companion would replace that release.
+	hostReleases, err := r.kdexHostNames(ctx, namespace)
+	if err == nil {
+		err = checkCompanionNames(host, hostReleases)
+	}
+	if err != nil {
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+		return
+	}
+	// Record every declared companion as this operator's BEFORE installing
+	// it, and install nothing if the record cannot be written: a release that
+	// exists unrecorded can never be pruned or torn down (#46). A recorded
+	// name with no release of its own is harmless, since only a release that
+	// also carries the host's label is ever acted on.
+	recorded, err := r.recordCompanions(ctx, host)
+	if err != nil {
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+		return
+	}
 	if host.Spec.Helm != nil {
 		for _, companion := range host.Spec.Helm.CompanionCharts {
 			if err := r.reconcileCompanionChart(c, host, companion); err != nil {
-				r.updateHelmStatus(ctx, namespace, name, hash, err, log)
+				r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
 				return
 			}
 		}
@@ -475,15 +512,55 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	// outside the guard above: dropping the entire spec.helm block orphans
 	// every companion, which is exactly when pruning matters most. Runs after
 	// the installs so a rename (x -> y) never leaves the host with neither.
-	if err := r.pruneCompanionCharts(c, host, log); err != nil {
-		r.updateHelmStatus(ctx, namespace, name, hash, err, log)
-		return
-	}
-
-	r.updateHelmStatus(ctx, namespace, name, hash, nil, log)
+	// What it removed leaves the record, whether or not it then failed.
+	pruned, err := r.pruneCompanionCharts(c, host, hostReleases, log)
+	record := nextCompanionRecord(recorded, nil, pruned)
+	r.updateHelmStatus(ctx, namespace, name, hash, err, &record, log)
 }
 
-func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, hash string, err error, log logr.Logger) {
+// recordCompanions adds every companion the host declares to
+// AttributeCompanionReleases, writing status only when that changes it, and
+// returns the record as it then stands.
+func (r *KDexHostReconciler) recordCompanions(ctx context.Context, host *kdexv1alpha1.KDexHost) (map[string]struct{}, error) {
+	recorded := recordedCompanions(host)
+	var declared []string
+	if host.Spec.Helm != nil {
+		for _, companion := range host.Spec.Helm.CompanionCharts {
+			declared = append(declared, companion.Name)
+		}
+	}
+	next := nextCompanionRecord(recorded, declared, nil)
+	if next == host.Status.Attributes[AttributeCompanionReleases] {
+		return recorded, nil
+	}
+	patch := client.MergeFrom(host.DeepCopy())
+	if host.Status.Attributes == nil {
+		host.Status.Attributes = make(map[string]string)
+	}
+	host.Status.Attributes[AttributeCompanionReleases] = next
+	if err := r.Status().Patch(ctx, host, patch); err != nil {
+		return nil, fmt.Errorf("failed to record the companion releases before installing them: %w", err)
+	}
+	return recordedCompanions(host), nil
+}
+
+// kdexHostNames names every KDexHost in the namespace. Each one's own Helm
+// release is named after it, so none of these names is a companion's.
+func (r *KDexHostReconciler) kdexHostNames(ctx context.Context, namespace string) (map[string]struct{}, error) {
+	var hosts kdexv1alpha1.KDexHostList
+	if err := r.List(ctx, &hosts, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("failed to list the namespace's KDexHosts: %w", err)
+	}
+	names := make(map[string]struct{}, len(hosts.Items))
+	for _, h := range hosts.Items {
+		names[h.Name] = struct{}{}
+	}
+	return names, nil
+}
+
+// updateHelmStatus reports a helm reconcile's outcome on the host. A non-nil
+// companionRecord replaces AttributeCompanionReleases; nil leaves it as it is.
+func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, hash string, err error, companionRecord *string, log logr.Logger) {
 	log.V(2).Info("updateHelmStatus", "hash", hash, "err", err)
 
 	defer r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
@@ -530,6 +607,12 @@ func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, na
 	}
 	host.Status.Attributes[AttributeHelmReleaseHash] = hash
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
+	if companionRecord != nil {
+		// Written even when empty: the reconcile's status patch preserves a
+		// helm.release. key the server holds, but restores a deleted one from
+		// its own stale snapshot.
+		host.Status.Attributes[AttributeCompanionReleases] = *companionRecord
+	}
 
 	if patchErr := r.Status().Patch(ctx, host, patch); patchErr != nil {
 		if !apierrors.IsNotFound(patchErr) && !apierrors.IsConflict(patchErr) {
@@ -668,17 +751,19 @@ func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClient
 	return helmClient.InstallOrUpgrade(spec)
 }
 
-// pruneCompanionCharts uninstalls companion releases this operator owns for the
-// host that the host no longer declares. Converging from desired state alone
-// cannot do this: an entry removed from the list leaves no trace in the spec,
-// so the release must be rediscovered from the cluster.
-func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, log logr.Logger) error {
-	owned, err := helmClient.ListReleases(companionLabels(host.Name))
+// pruneCompanionCharts uninstalls companion releases this operator installed
+// for the host that the host no longer declares, and returns the ones it
+// removed. Converging from desired state alone cannot do this: an entry removed
+// from the list leaves no trace in the spec, so the release must be found some
+// other way. Neither way alone is trusted (#46): the owner label is
+// rediscovered from Helm's records, which anyone who can write Secrets in the
+// namespace can label, and the operator's own record in status can name a
+// release since taken over. A release is pruned only when both name it, and
+// never when it is a KDexHost's own release.
+func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) ([]string, error) {
+	owned, err := ownedCompanions(helmClient, host, hostReleases, log)
 	if err != nil {
-		return err
-	}
-	if len(owned) == 0 {
-		return nil
+		return nil, err
 	}
 
 	declared := make(map[string]struct{})
@@ -688,27 +773,30 @@ func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInt
 		}
 	}
 
+	var pruned []string
 	for _, releaseName := range owned {
 		if _, stillDeclared := declared[releaseName]; stillDeclared {
 			continue
 		}
 		log.V(1).Info("pruning companion chart no longer declared", "release", releaseName, "host", host.Name)
 		if err := helmClient.Uninstall(releaseName); err != nil {
-			return fmt.Errorf("failed to prune companion chart %s: %w", releaseName, err)
+			return pruned, fmt.Errorf("failed to prune companion chart %s: %w", releaseName, err)
 		}
+		pruned = append(pruned, releaseName)
 	}
 
-	return nil
+	return pruned, nil
 }
 
 // uninstallCompanionCharts removes every companion release belonging to the
-// host on teardown: the union of what the spec still declares and what carries
-// the host's owner label. The union matters because the two sets can differ in
-// both directions — a companion dropped in the same edit that deleted the host
-// is owned but undeclared, while one added moments ago may be declared but not
-// yet installed.
-func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, log logr.Logger) error {
-	owned, err := helmClient.ListReleases(companionLabels(host.Name))
+// host on teardown: the union of what the spec still declares and what this
+// operator recorded installing and still finds labelled as the host's. The
+// union matters because the two sets can differ in both directions — a
+// companion dropped in the same edit that deleted the host is owned but
+// undeclared, while one added moments ago may be declared but not yet
+// installed. A KDexHost's own release is never one of them.
+func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) error {
+	owned, err := ownedCompanions(helmClient, host, hostReleases, log)
 	if err != nil {
 		return err
 	}
@@ -722,6 +810,9 @@ func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClien
 	if host.Spec.Helm != nil {
 		for _, companion := range host.Spec.Helm.CompanionCharts {
 			if _, dup := seen[companion.Name]; dup {
+				continue
+			}
+			if _, isHost := hostReleases[companion.Name]; isHost {
 				continue
 			}
 			seen[companion.Name] = struct{}{}
@@ -743,4 +834,74 @@ func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClien
 	}
 
 	return errors.Join(errs...)
+}
+
+// ownedCompanions returns the companion releases that are the host's to remove:
+// labelled as the host's AND recorded as installed by this operator, and not a
+// KDexHost's own release. A labelled release missing from the record is
+// reported, not removed: it is either a forgery or one installed before the
+// record existed, and only an operator can tell which.
+func ownedCompanions(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) ([]string, error) {
+	labelled, err := helmClient.ListReleases(companionLabels(host.Name))
+	if err != nil {
+		return nil, err
+	}
+	recorded := recordedCompanions(host)
+	owned := make([]string, 0, len(labelled))
+	for _, releaseName := range labelled {
+		if _, isHost := hostReleases[releaseName]; isHost {
+			log.Info("ignoring a release labelled as a companion that is a KDexHost's own release",
+				"release", releaseName, "host", host.Name)
+			continue
+		}
+		if _, ok := recorded[releaseName]; !ok {
+			log.Info("ignoring a release labelled as this host's companion that this operator has no record of installing",
+				"release", releaseName, "host", host.Name)
+			continue
+		}
+		owned = append(owned, releaseName)
+	}
+	return owned, nil
+}
+
+// recordedCompanions reads AttributeCompanionReleases.
+func recordedCompanions(host *kdexv1alpha1.KDexHost) map[string]struct{} {
+	recorded := map[string]struct{}{}
+	for name := range strings.SplitSeq(host.Status.Attributes[AttributeCompanionReleases], ",") {
+		if name != "" {
+			recorded[name] = struct{}{}
+		}
+	}
+	return recorded
+}
+
+// nextCompanionRecord is AttributeCompanionReleases with added recorded and
+// pruned removed.
+func nextCompanionRecord(recorded map[string]struct{}, added, pruned []string) string {
+	next := maps.Clone(recorded)
+	if next == nil {
+		next = map[string]struct{}{}
+	}
+	for _, name := range added {
+		next[name] = struct{}{}
+	}
+	for _, name := range pruned {
+		delete(next, name)
+	}
+	return strings.Join(slices.Sorted(maps.Keys(next)), ",")
+}
+
+// checkCompanionNames refuses a companion named after a KDexHost in the
+// namespace. A host's own release carries the host's name, so installing the
+// companion would upgrade that release with the companion's chart.
+func checkCompanionNames(host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}) error {
+	if host.Spec.Helm == nil {
+		return nil
+	}
+	for _, companion := range host.Spec.Helm.CompanionCharts {
+		if _, isHost := hostReleases[companion.Name]; isHost {
+			return fmt.Errorf("companion chart %q has the name of KDexHost %q, whose own Helm release it would replace", companion.Name, companion.Name)
+		}
+	}
+	return nil
 }
