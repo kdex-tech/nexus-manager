@@ -279,6 +279,7 @@ func main() {
 	}
 	if err := (&controller.KDexHostReconciler{
 		Client:        mgr.GetClient(),
+		APIReader:     mgr.GetAPIReader(),
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,

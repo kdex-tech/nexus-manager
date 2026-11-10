@@ -8,9 +8,11 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"kdex.dev/crds/configuration"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -32,8 +34,12 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 	for _, h := range hosts {
 		objs = append(objs, h)
 	}
+	// The indexes let a teardown, which lists a host's internal pages and
+	// translations by them, run against this cluster too.
 	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-		WithStatusSubresource(&kdexv1alpha1.KDexHost{})
+		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
+		WithIndex(&kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, func(client.Object) []string { return nil }).
+		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, func(client.Object) []string { return nil })
 	if funcs != nil {
 		b = b.WithInterceptorFuncs(*funcs)
 	}
@@ -299,5 +305,141 @@ func TestUpdateHelmStatus_TwoChangesFromOneStaleBaseBothSurvive(t *testing.T) {
 
 	if rec := getHost(t, fc, "my-host").Status.Attributes[AttributeCompanionReleases]; rec != "b" {
 		t.Errorf("companion record = %q, want %q", rec, "b")
+	}
+}
+
+// The manager's client reads through an informer cache. An optimistic-lock
+// retry that re-reads through it can see the same stale resourceVersion every
+// time, conflict every time, and lose the write: a helm outcome lost that way
+// leaves the host in_progress for a zombie re-run. The read behind a guarded
+// write goes to the API server.
+func TestPatchHostStatus_ReadsLiveWhenTheCacheIsStale(t *testing.T) {
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, recorded(helmHost("my-host", "b"), "a"))
+	stale := getHost(t, fc, "my-host")
+	// Something else writes the host, which the cache has yet to see.
+	addToRecord(t, fc, "my-host", "newer")
+
+	r.APIReader = fc
+	r.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if h, ok := obj.(*kdexv1alpha1.KDexHost); ok && key.Name == "my-host" {
+				stale.DeepCopyInto(h)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	installed := companionRecordChange{added: []string{"b"}}
+	r.updateHelmStatus(context.Background(), "ns", "my-host", "hash", nil, &installed, logr.Discard())
+
+	got := getHost(t, fc, "my-host")
+	if s := got.Status.Attributes[AttributeHelmReleaseStatus]; s != HelmStatusCompleted {
+		t.Errorf("helm status = %q, want %q: the outcome was lost", s, HelmStatusCompleted)
+	}
+	if rec := got.Status.Attributes[AttributeCompanionReleases]; rec != "a,b,newer" {
+		t.Errorf("companion record = %q, want %q", rec, "a,b,newer")
+	}
+}
+
+// blockingHelmClient holds the install of one release until released, standing
+// in for a helm call that cannot be cancelled: Helm takes no context.
+type blockingHelmClient struct {
+	*MockHelmClient
+	release string
+	entered chan struct{}
+	proceed chan struct{}
+}
+
+func (b *blockingHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
+	if spec.ReleaseName == b.release {
+		close(b.entered)
+		<-b.proceed
+	}
+	return b.MockHelmClient.InstallOrUpgrade(spec)
+}
+
+// Teardown lists the releases labelled as the host's. One a helm operation is
+// still installing has no release record yet, so it is not among them; were
+// teardown to finish and drop the finalizer, the install would then land
+// labelled for a host that no longer exists. Teardown waits for the operation.
+func TestTeardownWaitsForAnInFlightHelmOperation(t *testing.T) {
+	host := recorded(helmHost("my-host", "x1", "x2"))
+	host.Finalizers = []string{hostFinalizerName}
+	mock := &blockingHelmClient{
+		MockHelmClient: NewMockHelmClient(nil),
+		release:        "x2",
+		entered:        make(chan struct{}),
+		proceed:        make(chan struct{}),
+	}
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	key := client.ObjectKey{Namespace: "ns", Name: "my-host"}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runAsyncHelmReconcile(context.Background(), "ns", "my-host", "hash", nil, logr.Discard())
+	}()
+	<-mock.entered
+
+	if err := fc.Delete(context.Background(), getHost(t, fc, "my-host")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("teardown did not requeue while the helm operation was in flight")
+	}
+	if !controllerutil.ContainsFinalizer(getHost(t, fc, "my-host"), hostFinalizerName) {
+		t.Fatal("finalizer removed while the helm operation was still installing x2")
+	}
+	if u := mock.Uninstalled(); len(u) != 0 {
+		t.Errorf("uninstalled %v while the helm operation was in flight, want nothing yet", u)
+	}
+
+	close(mock.proceed)
+	<-done
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := fc.Get(context.Background(), key, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
+		t.Errorf("host still present after the helm operation finished (get = %v), want it finalized", err)
+	}
+	got := mock.Uninstalled()
+	slices.Sort(got)
+	if want := []string{"my-host", "x1", "x2"}; !slices.Equal(got, want) {
+		t.Errorf("uninstalled = %v, want %v", got, want)
+	}
+}
+
+// Helm cannot be interrupted mid-install, but a terminating host can stop the
+// operation installing anything more.
+func TestHelmReconcile_StopsInstallingOnceTheHostIsTerminating(t *testing.T) {
+	host := recorded(helmHost("my-host", "x1", "x2", "x3"))
+	host.Finalizers = []string{hostFinalizerName}
+	mock := &blockingHelmClient{
+		MockHelmClient: NewMockHelmClient(nil),
+		release:        "x2",
+		entered:        make(chan struct{}),
+		proceed:        make(chan struct{}),
+	}
+	r, fc := newHelmReconciler(t, mock, nil, host)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runAsyncHelmReconcile(context.Background(), "ns", "my-host", "hash", nil, logr.Discard())
+	}()
+	<-mock.entered
+	if err := fc.Delete(context.Background(), getHost(t, fc, "my-host")); err != nil {
+		t.Fatal(err)
+	}
+	close(mock.proceed)
+	<-done
+
+	if slices.Contains(mock.Installed(), "x3") {
+		t.Errorf("installed = %v: x3 was installed after the host began terminating", mock.Installed())
 	}
 }

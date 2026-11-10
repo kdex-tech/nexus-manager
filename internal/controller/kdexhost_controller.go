@@ -52,6 +52,9 @@ const (
 	kdexWeb           = "kdex-host"
 	hostFinalizerName = "kdex.dev/kdex-nexus-host-finalizer"
 	hostIndexKey      = "spec.hostRef.name"
+	// helmTeardownPoll is how soon a teardown waiting on an in-flight helm
+	// operation looks again.
+	helmTeardownPoll = time.Second
 )
 
 type helmOperation struct {
@@ -69,6 +72,13 @@ type cachedHelmClient struct {
 // KDexHostReconciler reconciles a KDexHost object
 type KDexHostReconciler struct {
 	client.Client
+	// APIReader reads straight from the API server, bypassing the informer
+	// cache Client reads from. A write guarded by an optimistic lock must read
+	// what it guards live: under informer lag a cached read returns the same
+	// stale resourceVersion on every retry, and every retry conflicts. So must
+	// teardown, which acts on the companion record as it stands now. Nil
+	// falls back to Client.
+	APIReader         client.Reader
 	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
@@ -86,10 +96,15 @@ type KDexHostReconciler struct {
 	HelmRenderConcurrency int
 
 	activeHelmOperations map[types.NamespacedName]helmOperation
-	mu                   sync.RWMutex
-	helmClients          map[string]cachedHelmClient
-	helmRenderSem        chan struct{}
-	helmRenderSemOnce    sync.Once
+	// helmRuns counts the runAsyncHelmReconcile goroutines still running for
+	// each host. Unlike activeHelmOperations, which a superseding operation or
+	// a teardown clears while the old goroutine may still be inside an
+	// uncancellable Helm call, an entry here lasts until the goroutine returns.
+	helmRuns          map[types.NamespacedName]int
+	mu                sync.RWMutex
+	helmClients       map[string]cachedHelmClient
+	helmRenderSem     chan struct{}
+	helmRenderSemOnce sync.Once
 }
 
 // nolint:gocyclo
@@ -264,6 +279,25 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// releases down, so it cannot re-install them afterwards.
 			r.cancelHelmOperation(req.NamespacedName)
 
+			// The cancel cannot stop a goroutine already inside a Helm call,
+			// which takes no context. One installing a companion has no
+			// release record for it yet, so the label listing below would not
+			// find it, and the install would land after the finalizer is gone:
+			// labelled for a host that no longer exists. Wait for it to return
+			// -- it installs nothing more once it sees the host terminating.
+			if r.helmRunInFlight(req.NamespacedName) {
+				log.V(1).Info("waiting for an in-flight helm operation before tearing down", "host", host.Name)
+				return ctrl.Result{RequeueAfter: helmTeardownPoll}, nil
+			}
+
+			// Teardown acts on the companion record as it stands now, which
+			// the operation that just returned may have written after the
+			// cache last saw the host.
+			live := &kdexv1alpha1.KDexHost{}
+			if err := r.reader().Get(ctx, req.NamespacedName, live); err != nil {
+				return ctrl.Result{}, client.IgnoreNotFound(err)
+			}
+
 			var uninstallErrs []error
 
 			// Uninstall host manager chart
@@ -277,7 +311,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// that deleted the host cannot outlive the CR.
 			hostReleases, err := r.kdexHostNames(ctx, host.Namespace)
 			if err == nil {
-				err = r.uninstallCompanionCharts(c, &host, hostReleases, log)
+				err = r.uninstallCompanionCharts(c, live, hostReleases, log)
 			}
 			if err != nil {
 				log.Error(err, "failed to uninstall companion releases", "host", host.Name)

@@ -213,6 +213,7 @@ var _ = BeforeSuite(func() {
 	// Host
 	hostReconciler = &KDexHostReconciler{
 		Client:        k8sManager.GetClient(),
+		APIReader:     k8sManager.GetAPIReader(),
 		ControllerID:  "test-controller",
 		Ctx:           ctx,
 		Configuration: configuration,
