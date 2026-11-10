@@ -208,18 +208,6 @@ func TestHelmReconcile_ForgetsRecordedNamesWithNoReleaseOrDeclaration(t *testing
 	}
 }
 
-// hookedHelmClient runs onUninstall before each uninstall, standing in for
-// whatever else writes the host while the prune waits on it.
-type hookedHelmClient struct {
-	*MockHelmClient
-	onUninstall func(releaseName string)
-}
-
-func (h *hookedHelmClient) Uninstall(releaseName string) error {
-	h.onUninstall(releaseName)
-	return h.MockHelmClient.Uninstall(releaseName)
-}
-
 // addToRecord adds name to the host's record the way another helm operation
 // for the same host would.
 func addToRecord(t *testing.T, c client.Client, host, name string) {

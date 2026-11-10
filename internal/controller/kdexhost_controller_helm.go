@@ -44,7 +44,8 @@ const (
 	AttributeHelmReleaseError       = helmAttributePrefix + "error"
 	AttributeHelmReleaseOwner       = helmAttributePrefix + "owner"
 	AttributeHelmReleaseLastAttempt = helmAttributePrefix + "last-attempt"
-	AttributeHelmReleaseFailures    = helmAttributePrefix + "failures"
+	AttributeHelmReleaseAttempts    = helmAttributePrefix + "attempts"
+	AttributeHelmReleaseSecretsHash = helmAttributePrefix + "secrets-hash"
 	// AttributeCompanionReleases records, comma-separated and sorted, every
 	// companion release this operator has installed (or is about to: a name
 	// is recorded before its install) for the host and not removed since. It
@@ -138,21 +139,21 @@ func (r *KDexHostReconciler) haltHelmRun(ctx context.Context, namespace, name, h
 // for one spec waits between them.
 const helmRetryBackoffCap = 15 * time.Minute
 
-// helmRetryBackoff is how long to wait after the failures-th consecutive
-// failure of one spec before running it again: base, doubled for each failure
-// after the first, at most helmRetryBackoffCap. Each run holds the fleet's one
+// helmRetryBackoff is how long to wait, from the last attempt at a run, before
+// the attempt after the attempts-th: base, doubled for each attempt after the
+// first, at most helmRetryBackoffCap. Each run holds the fleet's one
 // render slot for as long as its chart fetch takes, so a tenant chart that
 // fails slowly, retried at a flat interval, would hold it most of the time.
 //
 // Fetching outside the slot would free it outright, but Helm pulls a chart
 // into memory, and the slot exists to bound memory: unbounded concurrent
 // fetches of tenant-sized charts are the stampede it prevents.
-func helmRetryBackoff(base time.Duration, failures int) time.Duration {
+func helmRetryBackoff(base time.Duration, attempts int) time.Duration {
 	if base <= 0 {
 		return 0
 	}
 	d := base
-	for i := 1; i < failures; i++ {
+	for i := 1; i < attempts; i++ {
 		if d >= helmRetryBackoffCap/2 {
 			return helmRetryBackoffCap
 		}
@@ -161,10 +162,30 @@ func helmRetryBackoff(base time.Duration, failures int) time.Duration {
 	return min(d, helmRetryBackoffCap)
 }
 
-// helmFailures reads AttributeHelmReleaseFailures.
-func helmFailures(host *kdexv1alpha1.KDexHost) int {
-	n, _ := strconv.Atoi(host.Status.Attributes[AttributeHelmReleaseFailures])
+// helmAttempts reads AttributeHelmReleaseAttempts.
+func helmAttempts(host *kdexv1alpha1.KDexHost) int {
+	n, _ := strconv.Atoi(host.Status.Attributes[AttributeHelmReleaseAttempts])
 	return n
+}
+
+// takeHelmAttributes makes the helm.release. keys of snapshot, a reconcile's
+// copy of a host's attributes, those of cluster, the host as the cluster holds
+// it, and leaves every other key alone. The async helm operation owns those
+// keys and writes them while the reconcile runs: the reconcile's copy may hold
+// values the operation has since replaced, or keys it has since deleted -- a
+// success clears last-attempt and attempts, which the run's start set -- and
+// a status patch built from that copy would put them back.
+func takeHelmAttributes(snapshot, cluster map[string]string) {
+	for k := range snapshot {
+		if _, ok := cluster[k]; !ok && strings.HasPrefix(k, helmAttributePrefix) {
+			delete(snapshot, k)
+		}
+	}
+	for k, v := range cluster {
+		if strings.HasPrefix(k, helmAttributePrefix) {
+			snapshot[k] = v
+		}
+	}
 }
 
 // reader is APIReader, or Client when none is set.
@@ -432,6 +453,12 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	// Check if a Helm operation is already in progress using the latest status from the server
 	status := latestHost.Status.Attributes[AttributeHelmReleaseStatus]
 	recordedHash := latestHost.Status.Attributes[AttributeHelmReleaseHash]
+	// A retry is another attempt at the same run: the same spec, with the same
+	// resolved Secrets. A changed Secret -- the fix for a registry that
+	// refused the last attempt's credentials -- starts a new run, with no
+	// backoff to wait out.
+	secretsHash := utils.Hash(secrets)
+	sameRun := recordedHash == currentHash && latestHost.Status.Attributes[AttributeHelmReleaseSecretsHash] == secretsHash
 
 	key := client.ObjectKeyFromObject(host)
 	if status == HelmStatusInProgress {
@@ -459,17 +486,19 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		return controllerutil.OperationResultNone, nil
 	}
 
-	if status == HelmStatusFailed && recordedHash == currentHash {
-		// Last attempt failed for this same spec. The failure may have been
-		// transient (a network policy that hadn't landed yet, a registry
-		// blip, control-plane pressure during --wait), so we retry instead
-		// of locking the release in a permanent Degraded state. A backoff
-		// from r.RequeueDelay, growing with each consecutive failure, keeps
-		// us from hammering when the cause is chronic.
+	if (status == HelmStatusFailed || status == HelmStatusInProgress) && sameRun {
+		// The last attempt at this same run failed, or never finished: a
+		// zombie is what a run that killed the operator -- a chart that ran
+		// it out of memory -- leaves behind, recording no failure. Either may
+		// be transient (a network policy that hadn't landed yet, a registry
+		// blip, control-plane pressure during --wait), so we retry instead of
+		// locking the release in a permanent Degraded state. A backoff from
+		// r.RequeueDelay, growing with each attempt, keeps us from hammering
+		// -- or crash-looping -- when the cause is chronic.
 		if lastAttemptStr := latestHost.Status.Attributes[AttributeHelmReleaseLastAttempt]; lastAttemptStr != "" {
 			if lastAttempt, parseErr := time.Parse(time.RFC3339, lastAttemptStr); parseErr == nil {
 				elapsed := time.Since(lastAttempt)
-				interval := helmRetryBackoff(r.RequeueDelay, helmFailures(latestHost))
+				interval := helmRetryBackoff(r.RequeueDelay, helmAttempts(latestHost))
 				if elapsed < interval {
 					log.V(2).Info("reconcileHelmReleases#3b",
 						"host", host.Name, "namespace", host.Namespace,
@@ -493,12 +522,17 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	host.Status.Attributes[AttributeHelmReleaseGeneration] = strconv.FormatInt(host.Generation, 10)
 	host.Status.Attributes[AttributeHelmReleaseOwner] = r.ControllerID
 	delete(host.Status.Attributes, AttributeHelmReleaseError)
-	// Clear LastAttempt at the moment we transition into a new attempt. This
-	// patch operates on freshly-Get'd state, so the diff definitively removes
-	// the key on the server. The complementary delete in updateHelmStatus on
-	// success can race with stale-cache reads; clearing here is the reliable
-	// place to do it.
-	delete(host.Status.Attributes, AttributeHelmReleaseLastAttempt)
+	// Count the attempt now, as it starts, and stamp when: an attempt that
+	// kills the operator records nothing when it ends, and must still back
+	// off. A success clears both; a failure counts nothing more, and
+	// re-stamps the time from its end.
+	attempts := 1
+	if sameRun {
+		attempts = helmAttempts(latestHost) + 1
+	}
+	host.Status.Attributes[AttributeHelmReleaseAttempts] = strconv.Itoa(attempts)
+	host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
+	host.Status.Attributes[AttributeHelmReleaseSecretsHash] = secretsHash
 
 	kdexv1alpha1.SetConditions(
 		&host.Status.Conditions,
@@ -514,13 +548,6 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	// snapshot may predate the last one: carry the server's forward (#46).
 	if _, ok := companionRecord(latestHost); ok {
 		host.Status.Attributes[AttributeCompanionReleases] = latestHost.Status.Attributes[AttributeCompanionReleases]
-	}
-	// Failures are counted per spec: a retry of this one carries the
-	// server's count forward, a run for a new one starts from none.
-	if n, ok := latestHost.Status.Attributes[AttributeHelmReleaseFailures]; ok && recordedHash == currentHash {
-		host.Status.Attributes[AttributeHelmReleaseFailures] = n
-	} else {
-		delete(host.Status.Attributes, AttributeHelmReleaseFailures)
 	}
 
 	// We need to update the status now before starting the goroutine.
@@ -821,10 +848,10 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 	if err != nil {
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusFailed
 		host.Status.Attributes[AttributeHelmReleaseError] = err.Error()
-		// Timestamp and count the failure so the next reconcile can compute
-		// backoff and decide whether to retry (see reconcileHelmReleases#3b/#3c).
+		// Timestamp the failure so the next reconcile can compute backoff
+		// and decide whether to retry (see reconcileHelmReleases#3b/#3c). The
+		// attempt was counted when it started.
 		host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
-		host.Status.Attributes[AttributeHelmReleaseFailures] = strconv.Itoa(helmFailures(host) + 1)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
@@ -838,7 +865,7 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusCompleted
 		delete(host.Status.Attributes, AttributeHelmReleaseError)
 		delete(host.Status.Attributes, AttributeHelmReleaseLastAttempt)
-		delete(host.Status.Attributes, AttributeHelmReleaseFailures)
+		delete(host.Status.Attributes, AttributeHelmReleaseAttempts)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{

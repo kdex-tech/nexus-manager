@@ -232,22 +232,28 @@ func TestTeardownStopsWaitingOnceTheCapPasses(t *testing.T) {
 }
 
 // Helm cannot be interrupted mid-install, but a terminating host can stop the
-// operation installing anything more -- seen live, not through a cache that
-// has yet to see the deletion.
+// operation starting anything more -- not even the next fetch -- seen live,
+// not through a cache that has yet to see the deletion.
 func TestHelmReconcile_StopsInstallingOnceTheHostIsTerminating(t *testing.T) {
 	host := recorded(helmHost("my-host", "x1", "x2", "x3"))
 	host.Finalizers = []string{hostFinalizerName}
-	mock := newBlockingHelmClient("x2", nil)
-	r, fc := newHelmReconciler(t, mock, nil, host)
+	var fc client.Client
+	mock := &hookedHelmClient{
+		MockHelmClient: NewMockHelmClient(nil),
+		afterInstall: func(name string) {
+			if name == "x2" {
+				deleteHost(t, fc, "my-host")
+			}
+		},
+	}
+	var r *KDexHostReconciler
+	r, fc = newHelmReconciler(t, mock, nil, host)
 	staleHostCache(r, fc, notYetDeleted, interceptor.Funcs{})
 
-	runInBackground(t, context.Background(), r, mock, "my-host")
-	deleteHost(t, fc, "my-host")
-	close(mock.proceed)
-	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
+	r.runAsyncHelmReconcile(context.Background(), "ns", "my-host", "hash", nil, logr.Discard())
 
-	if slices.Contains(mock.Installed(), "x3") {
-		t.Errorf("installed = %v: x3 was installed after the host began terminating", mock.Installed())
+	if slices.Contains(mock.Attempted(), "x3") {
+		t.Errorf("attempted = %v: x3's install began after the host began terminating", mock.Attempted())
 	}
 }
 
@@ -266,25 +272,6 @@ func TestHelmReconcile_AbandonsARunWhoseHostBeganTerminatingWhileQueued(t *testi
 
 	if got := mock.Installed(); len(got) != 0 {
 		t.Errorf("installed = %v for a terminating host, want nothing", got)
-	}
-}
-
-// Teardown uninstalls every recorded release anyway, so a run whose host began
-// terminating prunes nothing: each prune would only delay the teardown.
-func TestHelmReconcile_SkipsThePruneOnceTheHostIsTerminating(t *testing.T) {
-	host := recorded(helmHost("my-host", "a"), "a", "dropped")
-	host.Finalizers = []string{hostFinalizerName}
-	mock := newBlockingHelmClient("a", map[string]map[string]string{"dropped": {LabelCompanionOf: "my-host"}})
-	r, fc := newHelmReconciler(t, mock, nil, host)
-	staleHostCache(r, fc, notYetDeleted, interceptor.Funcs{})
-
-	runInBackground(t, context.Background(), r, mock, "my-host")
-	deleteHost(t, fc, "my-host")
-	close(mock.proceed)
-	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
-
-	if got := mock.Uninstalled(); len(got) != 0 {
-		t.Errorf("uninstalled = %v after the host began terminating, want nothing", got)
 	}
 }
 

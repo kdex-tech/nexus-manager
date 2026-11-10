@@ -2,7 +2,8 @@ package controller
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"maps"
 	"runtime"
 	"slices"
 	"strconv"
@@ -23,25 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
-
-// observedHelmClient runs afterInstall once each install returns, and counts
-// release listings.
-type observedHelmClient struct {
-	*MockHelmClient
-	afterInstall func(releaseName string)
-	lists        atomic.Int32
-}
-
-func (o *observedHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
-	err := o.MockHelmClient.InstallOrUpgrade(spec)
-	o.afterInstall(spec.ReleaseName)
-	return err
-}
-
-func (o *observedHelmClient) ListReleases(labels map[string]string) ([]string, error) {
-	o.lists.Add(1)
-	return o.MockHelmClient.ListReleases(labels)
-}
 
 // A fetch can outlast teardown's wait for it, and teardown has gone ahead by
 // the time it returns. The chart it brought back is installed only if the host
@@ -70,7 +52,7 @@ func TestHelmReconcile_PrunesNothingForAHostThatBeganTerminatingAfterItsLastInst
 	host := recorded(helmHost("my-host", "x1"), "x1", "dropped")
 	host.Finalizers = []string{hostFinalizerName}
 	var fc client.Client
-	mock := &observedHelmClient{
+	mock := &hookedHelmClient{
 		MockHelmClient: NewMockHelmClient(map[string]map[string]string{"dropped": {LabelCompanionOf: "my-host"}}),
 		afterInstall: func(name string) {
 			if name == "x1" {
@@ -266,17 +248,25 @@ func TestHelmRetryBackoff(t *testing.T) {
 	}
 }
 
-func TestHelmReconcile_BacksOffRepeatedFailures(t *testing.T) {
+// sameRun stamps host with what reconcileHelmReleases compares to tell a
+// retry from a new run: the spec's hash and the resolved Secrets' hash.
+func sameRun(t *testing.T, host *kdexv1alpha1.KDexHost, status string, attempts int, lastAttempt time.Time) *kdexv1alpha1.KDexHost {
+	t.Helper()
 	probe, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil)
-	host := recorded(helmHost("my-host"))
 	hash, err := probe.computeHelmReleaseHash(host)
 	if err != nil {
 		t.Fatal(err)
 	}
-	host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusFailed
+	host.Status.Attributes[AttributeHelmReleaseStatus] = status
 	host.Status.Attributes[AttributeHelmReleaseHash] = hash
-	host.Status.Attributes[AttributeHelmReleaseFailures] = "3"
-	host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	host.Status.Attributes[AttributeHelmReleaseSecretsHash] = utils.Hash(kdexv1alpha1.Secrets(nil))
+	host.Status.Attributes[AttributeHelmReleaseAttempts] = strconv.Itoa(attempts)
+	host.Status.Attributes[AttributeHelmReleaseLastAttempt] = lastAttempt.UTC().Format(time.RFC3339)
+	return host
+}
+
+func TestHelmReconcile_BacksOffRepeatedFailures(t *testing.T) {
+	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 3, time.Now().Add(-2*time.Minute))
 	r, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
 	r.RequeueDelay = time.Minute
 
@@ -285,39 +275,102 @@ func TestHelmReconcile_BacksOffRepeatedFailures(t *testing.T) {
 		t.Fatalf("reconcileHelmReleases: %v", err)
 	}
 	if op != controllerutil.OperationResultNone {
-		t.Error("retried two minutes after a third failure, want it to wait four")
+		t.Error("retried two minutes after a third attempt failed, want it to wait four")
 	}
 	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
 }
 
-// The count is of consecutive failures for one spec: success clears it, and so
-// does a run for a different spec.
-func TestHelmFailuresAreCountedPerSpec(t *testing.T) {
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, recorded(helmHost("my-host")))
-	failed := errors.New("registry blip")
-	r.updateHelmStatus(context.Background(), "ns", "my-host", "hash", failed, nil, logr.Discard())
-	r.updateHelmStatus(context.Background(), "ns", "my-host", "hash", failed, nil, logr.Discard())
-	if n := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseFailures]; n != "2" {
-		t.Errorf("failures after two = %q, want 2", n)
-	}
-	r.updateHelmStatus(context.Background(), "ns", "my-host", "hash", nil, nil, logr.Discard())
-	if n, ok := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseFailures]; ok {
-		t.Errorf("failures after a success = %q, want none", n)
-	}
+// A run that kills the operator -- a chart that runs it out of memory --
+// records no failure: the host is left in_progress, and a restarted operator
+// finds a zombie. Restarting it at once would crash-loop the operator. Each
+// attempt is counted when it starts, and a zombie backs off like a failure.
+func TestHelmReconcile_BacksOffACrashLoop(t *testing.T) {
+	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusInProgress, 2, time.Now())
+	r, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	r.RequeueDelay = time.Minute
 
-	mock := NewMockHelmClient(nil)
-	mock.SetFailInstall(true, "still failing")
-	stale := recorded(helmHost("other"))
-	stale.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusFailed
-	stale.Status.Attributes[AttributeHelmReleaseHash] = "an older spec"
-	stale.Status.Attributes[AttributeHelmReleaseFailures] = "5"
-	r, fc = newHelmReconciler(t, mock, nil, stale)
-	if _, err := r.reconcileHelmReleases(context.Background(), stale.DeepCopy(), nil, logr.Discard()); err != nil {
+	op, err := r.reconcileHelmReleases(context.Background(), host.DeepCopy(), nil, logr.Discard())
+	if err != nil {
 		t.Fatalf("reconcileHelmReleases: %v", err)
 	}
-	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "other"})
-	if n := getHost(t, fc, "other").Status.Attributes[AttributeHelmReleaseFailures]; n != strconv.Itoa(1) {
-		t.Errorf("failures of a new spec's first run = %q, want 1", n)
+	if op != controllerutil.OperationResultNone {
+		t.Error("restarted a zombie the moment its second attempt began, want it to back off")
+	}
+	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
+}
+
+func TestHelmReconcile_CountsAnAttemptWhenItStarts(t *testing.T) {
+	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
+	mock := newBlockingHelmClient("my-host", nil)
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
+
+	if _, err := r.reconcileHelmReleases(context.Background(), host.DeepCopy(), nil, logr.Discard()); err != nil {
+		t.Fatalf("reconcileHelmReleases: %v", err)
+	}
+	<-mock.entered
+	running := getHost(t, fc, "my-host").Status.Attributes
+	close(mock.proceed)
+	awaitNoHelmRun(t, r, key)
+
+	if n := running[AttributeHelmReleaseAttempts]; n != "3" {
+		t.Errorf("attempts while the third runs = %q, want 3", n)
+	}
+	if _, ok := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseAttempts]; ok {
+		t.Error("attempts kept after a success, want them cleared")
+	}
+}
+
+// A failed attempt was counted when it started; failing does not count it
+// again.
+func TestHelmReconcile_CountsAFailedAttemptOnce(t *testing.T) {
+	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
+	mock := NewMockHelmClient(nil)
+	mock.SetFailInstall(true, "still failing")
+	r, fc := newHelmReconciler(t, mock, nil, host)
+
+	if _, err := r.reconcileHelmReleases(context.Background(), host.DeepCopy(), nil, logr.Discard()); err != nil {
+		t.Fatalf("reconcileHelmReleases: %v", err)
+	}
+	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
+
+	if n := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseAttempts]; n != "3" {
+		t.Errorf("attempts after a third failure = %q, want 3", n)
+	}
+}
+
+// Attempts are counted per spec and per resolved Secrets: fixing the
+// registry's Secret, or the spec, is a new run, not one more retry to wait out.
+func TestHelmReconcile_StartsCountingAgainForNewSecretsOrSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stale func(*kdexv1alpha1.KDexHost)
+	}{
+		{"secrets", func(h *kdexv1alpha1.KDexHost) { h.Status.Attributes[AttributeHelmReleaseSecretsHash] = "older secrets" }},
+		{"spec", func(h *kdexv1alpha1.KDexHost) { h.Status.Attributes[AttributeHelmReleaseHash] = "an older spec" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 5, time.Now().Add(-2*time.Minute))
+			tc.stale(host)
+			mock := newBlockingHelmClient("my-host", nil)
+			r, fc := newHelmReconciler(t, mock, nil, host)
+			r.RequeueDelay = time.Minute
+
+			op, err := r.reconcileHelmReleases(context.Background(), host.DeepCopy(), nil, logr.Discard())
+			if err != nil {
+				t.Fatalf("reconcileHelmReleases: %v", err)
+			}
+			if op != controllerutil.OperationResultUpdated {
+				t.Fatal("waited out the backoff of a different run")
+			}
+			<-mock.entered
+			n := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseAttempts]
+			close(mock.proceed)
+			awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
+			if n != "1" {
+				t.Errorf("attempts of the new run = %q, want 1", n)
+			}
+		})
 	}
 }
 
@@ -346,5 +399,84 @@ func TestTeardownWaitPollsSoonAndLeavesDegradedAlone(t *testing.T) {
 	}
 	if !meta.IsStatusConditionTrue(getHost(t, fc, "my-host").Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded)) {
 		t.Error("the waiting teardown cleared Degraded")
+	}
+}
+
+// decodingOverReader reads hosts as a real API client does: decoding into the
+// object it is given, which keeps whatever the JSON leaves out -- a deletion
+// timestamp, labels, map keys -- from what the object held before.
+func decodingOverReader(fc client.Client) client.Reader {
+	return interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*kdexv1alpha1.KDexHost); !ok {
+				return c.Get(ctx, key, obj, opts...)
+			}
+			live := &kdexv1alpha1.KDexHost{}
+			if err := c.Get(ctx, key, live, opts...); err != nil {
+				return err
+			}
+			data, err := json.Marshal(live)
+			if err != nil {
+				return err
+			}
+			return json.Unmarshal(data, obj)
+		},
+	})
+}
+
+// Teardown decides on the host as the cluster holds it, read into an object of
+// its own: decoded over the cached host, a deletion the cluster no longer
+// shows would survive from the cache.
+func TestTeardown_ReadsTheClusterHostIntoAFreshObject(t *testing.T) {
+	host := recorded(helmHost("my-host", "a"), "a")
+	host.UID = "same"
+	host.Finalizers = []string{hostFinalizerName}
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"my-host": {},
+		"a":       {LabelCompanionOf: "my-host"},
+	})
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	staleHostCache(r, fc, func(h *kdexv1alpha1.KDexHost) {
+		now := metav1.Now()
+		h.DeletionTimestamp = &now
+	}, interceptor.Funcs{})
+	r.APIReader = decodingOverReader(fc)
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "my-host"}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if u := mock.Uninstalled(); len(u) != 0 {
+		t.Errorf("uninstalled %v of a host the cluster does not show terminating", u)
+	}
+	if !controllerutil.ContainsFinalizer(getHost(t, fc, "my-host"), hostFinalizerName) {
+		t.Error("the finalizer of a host the cluster does not show terminating was removed")
+	}
+}
+
+// The helm operation owns the helm.release. attributes. A reconcile's status
+// patch takes them as the cluster holds them: a key the operation deleted --
+// a success clears last-attempt and attempts -- is not restored from the
+// reconcile's own copy, which may have set it when the operation started.
+func TestTakeHelmAttributes(t *testing.T) {
+	snapshot := map[string]string{
+		AttributeHelmReleaseLastAttempt: "when the run started",
+		AttributeHelmReleaseAttempts:    "1",
+		AttributeHelmReleaseStatus:      HelmStatusInProgress,
+		"theme.generation":              "7",
+	}
+	cluster := map[string]string{
+		AttributeHelmReleaseStatus: HelmStatusCompleted,
+		AttributeCompanionReleases: "a",
+	}
+
+	takeHelmAttributes(snapshot, cluster)
+
+	want := map[string]string{
+		AttributeHelmReleaseStatus: HelmStatusCompleted,
+		AttributeCompanionReleases: "a",
+		"theme.generation":         "7",
+	}
+	if !maps.Equal(snapshot, want) {
+		t.Errorf("attributes = %v, want %v", snapshot, want)
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -55,18 +54,21 @@ const (
 	// helmTeardownPoll is how soon a teardown waiting on an in-flight helm
 	// operation looks again. It is its own, shorter than RequeueDelay, since
 	// nothing else wakes the wait: an operation that stops because its host
-	// is terminating writes no status, so no event follows its end.
+	// is terminating writes no status, so no event follows its end. Each look
+	// costs two cached reads of the host and a status patch (the waiting
+	// condition), which a couple of seconds apart, for the minutes a wait can
+	// last, is cheap enough.
 	helmTeardownPoll = 2 * time.Second
 	// helmTeardownWaitCap is how long after a host's deletion began its
 	// teardown waits on an in-flight helm operation before going ahead
 	// without it. Once the host is terminating the operation starts no
 	// further Helm call, so it is past this only if the call it is in has
-	// outlived every deadline it has: a chart fetch, which spends at most
-	// RegistryFetchBudget on a registry (a request under way when that runs
-	// out is cut off then) or a few requests of at most ChartFetchTimeout
-	// each on a classic repository, then the call itself, at most
-	// HelmCallTimeout. The minute is margin.
-	helmTeardownWaitCap = utils.RegistryFetchBudget + utils.HelmCallTimeout + time.Minute
+	// outlived every deadline it has: a chart fetch -- at most
+	// RegistryFetchBudget from a registry, where a request under way when
+	// that runs out is cut off then, or a few requests of at most
+	// ChartFetchTimeout each (three, say) from a classic repository -- then
+	// the call itself, at most HelmCallTimeout. The minute is margin.
+	helmTeardownWaitCap = max(utils.RegistryFetchBudget, 3*utils.ChartFetchTimeout) + utils.HelmCallTimeout + time.Minute
 )
 
 type helmOperation struct {
@@ -155,17 +157,12 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 		patch := client.MergeFrom(latestHost.DeepCopy())
 
-		// Preserve Helm status attributes if they were updated by the goroutine
-		if latestHost.Status.Attributes != nil {
-			if host.Status.Attributes == nil {
-				host.Status.Attributes = make(map[string]string)
-			}
-			for k, v := range latestHost.Status.Attributes {
-				if strings.HasPrefix(k, helmAttributePrefix) {
-					host.Status.Attributes[k] = v
-				}
-			}
+		// The Helm status attributes are the goroutine's: take them as the
+		// cluster holds them.
+		if host.Status.Attributes == nil {
+			host.Status.Attributes = make(map[string]string)
 		}
+		takeHelmAttributes(host.Status.Attributes, latestHost.Status.Attributes)
 
 		// Update conditions carefully - if helm failed in the cluster, don't overwrite it with something else
 		currentHelmStatus := latestHost.Status.Attributes[AttributeHelmReleaseStatus]
@@ -202,8 +199,8 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}()
 
 	// A teardown waits out an in-flight helm operation before it reads
-	// anything more, so a pass that only finds it still waiting costs no more
-	// than the cached read of the host above.
+	// anything more: a pass that only finds it still waiting reads no Secrets,
+	// lists nothing, and makes no live read.
 	if !host.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(&host, hostFinalizerName) {
 		if requeue, wait := r.awaitHelmRunBeforeTeardown(&host, log); wait {
 			return requeue, nil
@@ -241,15 +238,19 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// removes the finalizer by an update the cache's resourceVersion
 			// would make conflict. And it acts only on the host the cache
 			// showed terminating: under that name the cluster may now hold a
-			// new host, whose releases and finalizer are its own.
-			terminating := host.UID
-			if err := r.reader().Get(ctx, req.NamespacedName, &host); err != nil {
+			// new host, whose releases and finalizer are its own. Read into an
+			// object of its own: decoded over the cached host, whatever the
+			// cluster's copy leaves out -- a deletion timestamp, a label, a
+			// map key -- would survive from the cache.
+			live := &kdexv1alpha1.KDexHost{}
+			if err := r.reader().Get(ctx, req.NamespacedName, live); err != nil {
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
-			if host.UID != terminating || host.DeletionTimestamp.IsZero() {
-				log.V(1).Info("the terminating host is gone and another holds its name; nothing to tear down", "host", host.Name)
+			if live.UID != host.UID || live.DeletionTimestamp.IsZero() {
+				log.V(1).Info("the cluster does not hold this host terminating; nothing to tear down", "host", host.Name)
 				return ctrl.Result{}, nil
 			}
+			host = *live
 
 			internalHost := &kdexv1alpha1.KDexInternalHost{}
 			err := r.Get(ctx, req.NamespacedName, internalHost)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"helm.sh/helm/v4/pkg/registry"
 	"helm.sh/helm/v4/pkg/release"
 	v1 "helm.sh/helm/v4/pkg/repo/v1"
+	"helm.sh/helm/v4/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -48,8 +50,24 @@ const (
 	// unpinned or ranged version lists the repository's tags, page after
 	// page, each page a fast request, for as long as the registry hands out
 	// another Link -- and holds the render slot throughout.
-	RegistryFetchBudget      = 5 * time.Minute
+	RegistryFetchBudget = 5 * time.Minute
+	//
+	// It counts requests as the registry client makes them: a request the
+	// transport retries counts once.
 	RegistryFetchMaxRequests = 500
+
+	// RegistryFetchMaxTagListBytes bounds the bytes of tag listings one chart
+	// operation may read, and RegistryFetchMaxBytes the bytes of everything
+	// else it reads from a registry. Time and request count do not bound
+	// memory: to resolve a version range Helm keeps every semver tag of every
+	// page, several times its size on the wire, and it pulls a chart's blobs
+	// into memory whatever size they declare. Tag listings get the tighter
+	// limit for that expansion -- 2MiB is some tens of thousands of tags; a
+	// real repository lists hundreds. The other is far above any real chart
+	// archive (Helm's own host-manager chart is tens of KiB) and far below the
+	// operator's memory limit.
+	RegistryFetchMaxTagListBytes = 2 << 20
+	RegistryFetchMaxBytes        = 16 << 20
 
 	// ChartFetchTimeout bounds every request to a chart registry, as Helm's
 	// own getter.DefaultHTTPTimeout bounds every request to a classic
@@ -259,16 +277,25 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 func (h *HelmClient) Uninstall(releaseName string) error {
 	client := action.NewUninstall(h.actionConfig)
 	client.DisableHooks = true
-	// A release that does not exist is uninstalled. Without KeepHistory a
-	// successful uninstall purges the release, so a teardown retrying after
-	// another release failed would otherwise fail on this one -- already gone
-	// -- every time, and hold the host's finalizer forever.
-	client.IgnoreNotFound = true
 	client.Timeout = HelmCallTimeout
 	client.DeletionPropagation = "foreground"
 	client.WaitStrategy = kube.StatusWatcherStrategy
 
 	_, err := client.Run(releaseName)
+	// A release that does not exist is uninstalled. Without KeepHistory a
+	// successful uninstall purges the release, so a teardown retrying after
+	// another release failed would otherwise fail on this one -- already gone
+	// -- every time, and hold the host's finalizer forever.
+	//
+	// Not by Uninstall.IgnoreNotFound: in Helm v4.1.3 (and v4.3.1, the
+	// latest) it returns success for ANY error looking up the release's
+	// history -- throttling, an unavailable API server, a timeout -- and
+	// success here lets teardown drop the finalizer, or a prune drop the
+	// release from the record, while the release lives on. Run wraps the
+	// lookup's error, so only a genuine ErrReleaseNotFound is let through.
+	if errors.Is(err, driver.ErrReleaseNotFound) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to uninstall release %s: %w", releaseName, err)
 	}
@@ -292,15 +319,19 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 
 // registryFetchLimits bounds one chart operation's traffic to a registry.
 type registryFetchLimits struct {
-	requestTimeout time.Duration
-	budget         time.Duration
-	maxRequests    int
+	requestTimeout  time.Duration
+	budget          time.Duration
+	maxRequests     int
+	maxTagListBytes int64
+	maxBytes        int64
 }
 
 var defaultRegistryFetchLimits = registryFetchLimits{
-	requestTimeout: ChartFetchTimeout,
-	budget:         RegistryFetchBudget,
-	maxRequests:    RegistryFetchMaxRequests,
+	requestTimeout:  ChartFetchTimeout,
+	budget:          RegistryFetchBudget,
+	maxRequests:     RegistryFetchMaxRequests,
+	maxTagListBytes: RegistryFetchMaxTagListBytes,
+	maxBytes:        RegistryFetchMaxBytes,
 }
 
 // registryClientOptions configures the registry client for chartName's
@@ -383,22 +414,38 @@ func registryClientOptions(chartName string, secrets kdexv1alpha1.Secrets, debug
 	return options, nil
 }
 
-// registryTransport is the transport registry.NewTransport builds -- a clone
-// of http.DefaultTransport, so proxy-from-environment and its dial and idle
-// timeouts are kept, wrapped for retries and, when debug, for logging -- with
-// TLS verification off when insecure.
+// registryTransport is the transport registry.NewTransport (Helm v4.1.3)
+// builds -- a clone of http.DefaultTransport, wrapped for retries and, when
+// debug, for logging -- with TLS verification off when insecure. It is a
+// workaround: Helm v4.1.3 through v4.3.1 has no ClientOpt for unverified TLS,
+// so an insecure registry needs a transport of our own, and this one keeps
+// what NewTransport gives every other registry. Delete it once Helm has one.
+//
+// An insecure (or plain-HTTP) registry is reached directly, as it always was,
+// not through a proxy taken from the environment: that proxy would carry the
+// registry's credentials in the clear, and an in-cluster registry missing
+// from NO_PROXY would become unreachable.
 func registryTransport(debug, insecure bool) http.RoundTripper {
 	if !insecure {
 		return registry.NewTransport(debug)
 	}
-	var base http.RoundTripper
-	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if ok {
 		t = t.Clone()
-		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the registry's secret asks for it
-		base = t
 	} else {
-		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // as above
+		// http.DefaultTransport's own settings, should it ever be wrapped.
+		t = &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
 	}
+	t.Proxy = nil
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the registry's secret asks for it
+	var base http.RoundTripper = t
 	if debug {
 		base = &registry.LoggingTransport{RoundTripper: base}
 	}
@@ -409,32 +456,34 @@ func registryTransport(debug, insecure bool) http.RoundTripper {
 var errFetchBudget = errors.New("registry fetch budget exhausted")
 
 // fetchBudget refuses every request once the fetch it belongs to has made
-// maxRequests of them, and cuts off any request at the fetch's deadline. One is
-// made per registry client, and registryBind makes a client per chart
-// operation, so the budget is one operation's.
+// maxRequests of them, cuts off any request at the fetch's deadline, and fails
+// any read past the fetch's byte limits: maxTagListBytes across its tag
+// listings, maxBytes across the rest. One is made per registry client, and
+// registryBind makes a client per chart operation, so the budget is one
+// operation's.
 type fetchBudget struct {
-	next        http.RoundTripper
-	deadline    time.Time
-	budget      time.Duration
-	maxRequests int64
-	made        atomic.Int64
+	next       http.RoundTripper
+	deadline   time.Time
+	limits     registryFetchLimits
+	made       atomic.Int64
+	tagBytes   atomic.Int64
+	otherBytes atomic.Int64
 }
 
 func newFetchBudget(next http.RoundTripper, limits registryFetchLimits) *fetchBudget {
 	return &fetchBudget{
-		next:        next,
-		deadline:    time.Now().Add(limits.budget),
-		budget:      limits.budget,
-		maxRequests: int64(limits.maxRequests),
+		next:     next,
+		deadline: time.Now().Add(limits.budget),
+		limits:   limits,
 	}
 }
 
 func (b *fetchBudget) RoundTrip(req *http.Request) (*http.Response, error) {
-	if n := b.made.Add(1); n > b.maxRequests {
-		return nil, fmt.Errorf("%w: more than %d requests", errFetchBudget, b.maxRequests)
+	if n := b.made.Add(1); n > int64(b.limits.maxRequests) {
+		return nil, fmt.Errorf("%w: more than %d requests", errFetchBudget, b.limits.maxRequests)
 	}
 	if !time.Now().Before(b.deadline) {
-		return nil, fmt.Errorf("%w: more than %s", errFetchBudget, b.budget)
+		return nil, fmt.Errorf("%w: more than %s", errFetchBudget, b.limits.budget)
 	}
 	ctx, cancel := context.WithDeadline(req.Context(), b.deadline)
 	resp, err := b.next.RoundTrip(req.WithContext(ctx))
@@ -442,19 +491,35 @@ func (b *fetchBudget) RoundTrip(req *http.Request) (*http.Response, error) {
 		cancel()
 		return nil, err
 	}
-	resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	body := &budgetedBody{ReadCloser: resp.Body, cancel: cancel, read: &b.otherBytes, limit: b.limits.maxBytes, of: "registry responses"}
+	if strings.HasSuffix(req.URL.Path, "/tags/list") {
+		body.read, body.limit, body.of = &b.tagBytes, b.limits.maxTagListBytes, "tag listings"
+	}
+	resp.Body = body
 	return resp, nil
 }
 
-// cancelOnClose releases a response's deadline once its body is closed.
-type cancelOnClose struct {
+// budgetedBody counts what is read of a response against its fetch's byte
+// limit, and releases the response's deadline once it is closed.
+type budgetedBody struct {
 	io.ReadCloser
 	cancel context.CancelFunc
+	read   *atomic.Int64
+	limit  int64
+	of     string
 }
 
-func (c *cancelOnClose) Close() error {
-	defer c.cancel()
-	return c.ReadCloser.Close()
+func (b *budgetedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if b.read.Add(int64(n)) > b.limit {
+		return n, fmt.Errorf("%w: more than %d bytes of %s", errFetchBudget, b.limit, b.of)
+	}
+	return n, err
+}
+
+func (b *budgetedBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
 }
 
 // registryMatches reports whether a chart registry reference (host[/path], with

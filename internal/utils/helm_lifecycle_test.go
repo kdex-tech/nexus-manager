@@ -97,3 +97,28 @@ func releaseVersion(t *testing.T, rel release.Releaser) int {
 	}
 	return a.Version()
 }
+
+// failingQueries is release storage whose lookups fail as the API server can:
+// throttled, unavailable, timed out.
+type failingQueries struct {
+	*driver.Memory
+	err error
+}
+
+func (f *failingQueries) Query(map[string]string) ([]release.Releaser, error) {
+	return nil, f.err
+}
+
+// Only a release that is not there is uninstalled by doing nothing. A lookup
+// that failed says nothing about whether the release is there, and reporting
+// success would let teardown drop the host's finalizer, or a prune drop the
+// release from the record, while the release lives on.
+func TestHelmClient_UninstallReportsAFailedReleaseLookup(t *testing.T) {
+	h := memoryHelmClient(t)
+	unavailable := errors.New("the server is currently unable to handle the request")
+	h.actionConfig.Releases = storage.Init(&failingQueries{Memory: driver.NewMemory(), err: unavailable})
+
+	if err := h.Uninstall("companion"); !errors.Is(err, unavailable) {
+		t.Errorf("Uninstall with a failing release lookup = %v, want that failure", err)
+	}
+}

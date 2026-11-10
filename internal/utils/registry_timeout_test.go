@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	"oras.land/oras-go/v2/registry/remote/retry"
 )
 
 // helmSecret is a Helm registry secret for repo, with data.
@@ -79,8 +83,8 @@ func TestRegistryClient_TimesOutAgainstATarpit(t *testing.T) {
 			}()
 			select {
 			case err := <-done:
-				if err == nil || !strings.Contains(err.Error(), "Client.Timeout") {
-					t.Fatalf("Tags against a tarpit = %v, want the client's timeout", err)
+				if !isTimeout(err) {
+					t.Fatalf("Tags against a tarpit = %v, want a timeout", err)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("Tags against a tarpit did not return: the registry client has no deadline")
@@ -90,7 +94,24 @@ func TestRegistryClient_TimesOutAgainstATarpit(t *testing.T) {
 }
 
 func testLimits(request, budget time.Duration, maxRequests int) registryFetchLimits {
-	return registryFetchLimits{requestTimeout: request, budget: budget, maxRequests: maxRequests}
+	return registryFetchLimits{
+		requestTimeout:  request,
+		budget:          budget,
+		maxRequests:     maxRequests,
+		maxTagListBytes: RegistryFetchMaxTagListBytes,
+		maxBytes:        RegistryFetchMaxBytes,
+	}
+}
+
+// isTimeout reports whether err is a deadline that ran out, whichever layer
+// noticed first: the http.Client's Timeout, or the retry transport's own
+// context check, which returns a bare context.DeadlineExceeded.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // tagsWithin lists ref's tags through a registry client built with limits for
@@ -228,5 +249,92 @@ func TestRegistryClient_SendsTheSecretsCredentials(t *testing.T) {
 
 	if err := tagsWithin(t, host+"/charts/c", secrets, defaultRegistryFetchLimits, 20*time.Second); err != nil {
 		t.Errorf("Tags with the secret's credentials = %v, want nil", err)
+	}
+}
+
+// bigTags serves tag pages of pageBytes each, endlessly.
+func bigTags(pageBytes int, served *atomic.Int64) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := served.Add(1)
+		var tags []string
+		for size := 0; size < pageBytes; size += 16 {
+			tags = append(tags, fmt.Sprintf(`"%d.%d.0"`, n, size))
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s?n=1&last=%d>; rel="next"`, r.URL.Path, n))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"name":"charts/tarpit","tags":[%s]}`, strings.Join(tags, ","))
+	})
+}
+
+// Time and request count do not bound memory. A version range keeps every
+// semver tag of every page in the heap, several times its size on the wire,
+// and a blob is pulled into memory whatever size it declares: a tenant's
+// registry could grow the operator past its memory limit within its budget.
+// The fetch's bytes are bounded too, tag listings tightly.
+func TestRegistryClient_BoundsTheBytesATagListingReads(t *testing.T) {
+	var served atomic.Int64
+	srv := httptest.NewServer(bigTags(256<<10, &served))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	limits := testLimits(time.Minute, time.Minute, 1_000_000)
+	limits.maxTagListBytes = 1 << 20
+
+	err := tagsWithin(t, host+"/charts/tarpit", helmSecret(host, map[string]string{"plainHTTP": "true"}), limits, 20*time.Second)
+	if !errors.Is(err, errFetchBudget) {
+		t.Fatalf("an endless listing of large pages = %v, want the fetch budget exhausted", err)
+	}
+	if n := served.Load(); n > 6 {
+		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped at the fifth", n)
+	}
+}
+
+func TestFetchBudget_BoundsTheBytesOfAnyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := make([]byte, 64<<10)
+		for range 1 << 10 { // 64MiB
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	limits := testLimits(time.Minute, time.Minute, 100)
+	limits.maxBytes = 1 << 20
+	c := &http.Client{Transport: newFetchBudget(http.DefaultTransport, limits)}
+
+	resp, err := c.Get(srv.URL + "/v2/charts/c/blobs/sha256:abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	n, err := io.Copy(io.Discard, resp.Body)
+	if !errors.Is(err, errFetchBudget) {
+		t.Errorf("reading a 64MiB blob within a 1MiB budget = %v, want the fetch budget exhausted", err)
+	}
+	if n > 2<<20 {
+		t.Errorf("read %d bytes within a 1MiB budget", n)
+	}
+}
+
+// An insecure or plain-HTTP registry is reached directly, as it always was: a
+// proxy taken from the environment would carry its credentials in the clear,
+// and an in-cluster registry missing from NO_PROXY would become unreachable.
+func TestRegistryTransport_InsecureGoesDirect(t *testing.T) {
+	rt, ok := registryTransport(false, true).(*retry.Transport)
+	if !ok {
+		t.Fatalf("registryTransport = %T, want it wrapped for retries", registryTransport(false, true))
+	}
+	base, ok := rt.Base.(*http.Transport)
+	if !ok {
+		t.Fatalf("base transport = %T", rt.Base)
+	}
+	if base.Proxy != nil {
+		t.Error("the insecure transport takes a proxy from the environment")
+	}
+	if base.TLSClientConfig == nil || !base.TLSClientConfig.InsecureSkipVerify {
+		t.Error("the insecure transport verifies TLS")
+	}
+	if base.DialContext == nil || base.TLSHandshakeTimeout == 0 || base.IdleConnTimeout == 0 {
+		t.Error("the insecure transport lost the default transport's dial and idle timeouts")
 	}
 }
