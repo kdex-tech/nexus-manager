@@ -151,7 +151,7 @@ func TestPruneCompanionCharts_LabelAloneNamesNoTarget(t *testing.T) {
 	})
 
 	r := &KDexHostReconciler{}
-	pruned, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "dropped"), hostReleases("my-host"), logr.Discard())
+	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "dropped"), hostReleases("my-host"), logr.Discard())
 	if err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestPruneCompanionCharts_RecordAloneNamesNoTarget(t *testing.T) {
 	})
 
 	r := &KDexHostReconciler{}
-	pruned, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "taken-over"), hostReleases("my-host", "other-host"), logr.Discard())
+	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "taken-over"), hostReleases("my-host", "other-host"), logr.Discard())
 	if err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestCompanionCharts_NeverTouchAKDexHostRelease(t *testing.T) {
 	hosts := hostReleases("my-host", "other-host")
 	r := &KDexHostReconciler{}
 
-	if _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "other-host", "my-host"), hosts, logr.Discard()); err != nil {
+	if _, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "other-host", "my-host"), hosts, logr.Discard()); err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
 	if err := r.uninstallCompanionCharts(mock, host, hosts, logr.Discard()); err != nil {
@@ -211,19 +211,76 @@ func TestCompanionCharts_NeverTouchAKDexHostRelease(t *testing.T) {
 	}
 }
 
+// The record a run writes is ((recorded + installed) - pruned), kept only
+// where the spec declares a name or a release labelled as the host's carries
+// it, applied to the record as the server holds it rather than as the run
+// first read it.
 func TestNextCompanionRecord(t *testing.T) {
 	got := nextCompanionRecord(
-		map[string]struct{}{"a": {}, "dropped": {}},
-		[]string{"b", "a"},
-		[]string{"dropped"},
+		// "other" was recorded by an overlapping run this one never saw.
+		map[string]struct{}{"a": {}, "dropped": {}, "failed": {}, "redeclared": {}, "other": {}},
+		companionRecordChange{
+			added:  []string{"b", "a"},
+			pruned: []string{"dropped"},
+			stale:  []string{"failed", "redeclared"},
+		},
+		// The spec as it is now declares "redeclared" again.
+		map[string]struct{}{"a": {}, "b": {}, "redeclared": {}},
 	)
-	if got != "a,b" {
-		t.Errorf("nextCompanionRecord = %q, want %q", got, "a,b")
+	if want := "a,b,other,redeclared"; got != want {
+		t.Errorf("nextCompanionRecord = %q, want %q", got, want)
+	}
+	stale := staleCompanions(
+		map[string]struct{}{"a": {}, "labelled": {}, "failed": {}},
+		map[string]struct{}{"a": {}},
+		map[string]struct{}{"labelled": {}},
+	)
+	if !slices.Equal(stale, []string{"failed"}) {
+		t.Errorf("staleCompanions = %v, want [failed]", stale)
 	}
 	if got := recordedCompanions(recorded(hostWithCompanions("h"), "a", "b")); len(got) != 2 {
 		t.Errorf("recordedCompanions = %v, want a and b", got)
 	}
 	if got := recordedCompanions(hostWithCompanions("h")); len(got) != 0 {
 		t.Errorf("recordedCompanions of an unrecorded host = %v, want none", got)
+	}
+}
+
+// kdex-tech/nexus-manager#46: a declared name is not a release this operator
+// installed. Its install may have failed, or the host may be deleted before
+// the run that would install it -- and then anyone who can write a Secret in
+// the namespace can forge a release under that name, with the host's label,
+// for teardown to uninstall. Teardown removes only what the record names.
+func TestUninstallCompanionCharts_DeclaredAloneNamesNoTarget(t *testing.T) {
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"mine":   {LabelCompanionOf: "my-host"},
+		"forged": {LabelCompanionOf: "my-host"},
+	})
+
+	r := &KDexHostReconciler{}
+	host := recorded(hostWithCompanions("my-host", "mine", "forged", "never-installed"), "mine")
+	if err := r.uninstallCompanionCharts(mock, host, hostReleases("my-host"), logr.Discard()); err != nil {
+		t.Fatalf("uninstallCompanionCharts returned error: %v", err)
+	}
+	if !slices.Equal(mock.Uninstalled(), []string{"mine"}) {
+		t.Errorf("uninstalled releases = %v, want [mine]", mock.Uninstalled())
+	}
+}
+
+// A host whose companions were installed before the record existed, and that
+// is deleted before any reconcile could seed its record, would otherwise leave
+// every companion behind. With no record at all, the spec stands in for it.
+func TestUninstallCompanionCharts_TreatsAnAbsentRecordAsTheSpec(t *testing.T) {
+	mock := NewMockHelmClient(map[string]map[string]string{
+		"legacy":     {LabelCompanionOf: "my-host"},
+		"relabelled": {LabelCompanionOf: "my-host"},
+	})
+
+	r := &KDexHostReconciler{}
+	if err := r.uninstallCompanionCharts(mock, hostWithCompanions("my-host", "legacy"), hostReleases("my-host"), logr.Discard()); err != nil {
+		t.Fatalf("uninstallCompanionCharts returned error: %v", err)
+	}
+	if !slices.Equal(mock.Uninstalled(), []string{"legacy"}) {
+		t.Errorf("uninstalled releases = %v, want [legacy]", mock.Uninstalled())
 	}
 }

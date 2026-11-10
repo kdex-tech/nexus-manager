@@ -129,7 +129,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				host.Status.Attributes = make(map[string]string)
 			}
 			for k, v := range latestHost.Status.Attributes {
-				if strings.HasPrefix(k, "helm.release.") {
+				if strings.HasPrefix(k, helmAttributePrefix) {
 					host.Status.Attributes[k] = v
 				}
 			}
