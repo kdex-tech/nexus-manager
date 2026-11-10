@@ -48,6 +48,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
@@ -180,7 +181,11 @@ var _ = BeforeSuite(func() {
 			Logger: logger,
 		},
 		Logger: logger,
-		Scheme: scheme.Scheme,
+		// No metrics server: nothing reads it, and its default :8080 collides
+		// with anything else on the machine using that port -- including a
+		// second module's suite run in parallel -- failing every spec.
+		Metrics: metricsserver.Options{BindAddress: "0"},
+		Scheme:  scheme.Scheme,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:    testEnv.WebhookInstallOptions.LocalServingPort,
 			CertDir: testEnv.WebhookInstallOptions.LocalServingCertDir,
