@@ -151,7 +151,7 @@ func TestPruneCompanionCharts_LabelAloneNamesNoTarget(t *testing.T) {
 	})
 
 	r := &KDexHostReconciler{}
-	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "dropped"), hostReleases("my-host"), logr.Discard())
+	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "dropped"), hostReleases("my-host"), nil, logr.Discard())
 	if err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestPruneCompanionCharts_RecordAloneNamesNoTarget(t *testing.T) {
 	})
 
 	r := &KDexHostReconciler{}
-	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "taken-over"), hostReleases("my-host", "other-host"), logr.Discard())
+	pruned, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "taken-over"), hostReleases("my-host", "other-host"), nil, logr.Discard())
 	if err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestCompanionCharts_NeverTouchAKDexHostRelease(t *testing.T) {
 	hosts := hostReleases("my-host", "other-host")
 	r := &KDexHostReconciler{}
 
-	if _, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "other-host", "my-host"), hosts, logr.Discard()); err != nil {
+	if _, _, err := r.pruneCompanionCharts(mock, recorded(hostWithCompanions("my-host"), "other-host", "my-host"), hosts, nil, logr.Discard()); err != nil {
 		t.Fatalf("pruneCompanionCharts returned error: %v", err)
 	}
 	if err := r.uninstallCompanionCharts(mock, host, hosts, logr.Discard()); err != nil {

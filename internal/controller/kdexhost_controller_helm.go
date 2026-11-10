@@ -70,24 +70,6 @@ const (
 	LabelCompanionOf = "kdex.dev/companion-of"
 )
 
-// beginHelmRun counts a helm operation goroutine as running for the host until
-// the returned func is called.
-func (r *KDexHostReconciler) beginHelmRun(key types.NamespacedName) func() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.helmRuns == nil {
-		r.helmRuns = make(map[types.NamespacedName]int)
-	}
-	r.helmRuns[key]++
-	return func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if r.helmRuns[key]--; r.helmRuns[key] <= 0 {
-			delete(r.helmRuns, key)
-		}
-	}
-}
-
 // helmRunInFlight reports whether a helm operation goroutine for the host is
 // still running in this process, cancelled or not.
 func (r *KDexHostReconciler) helmRunInFlight(key types.NamespacedName) bool {
@@ -96,17 +78,51 @@ func (r *KDexHostReconciler) helmRunInFlight(key types.NamespacedName) bool {
 	return r.helmRuns[key] > 0
 }
 
-// hostTerminating reads the host live and reports whether it is gone or being
+// errHostTerminating stops a helm operation whose host is gone or being
 // deleted.
-func (r *KDexHostReconciler) hostTerminating(ctx context.Context, key types.NamespacedName) (bool, error) {
+var errHostTerminating = errors.New("host is terminating")
+
+// helmRunWanted returns why a helm operation should go no further, or nil:
+// its context is done (superseded, torn down, or the operator stopping), its
+// host is gone or terminating (errHostTerminating), or the host could not be
+// read. It reads the host live, since a cache can predate the deletion it is
+// there to notice.
+func (r *KDexHostReconciler) helmRunWanted(ctx context.Context, key types.NamespacedName) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	host := &kdexv1alpha1.KDexHost{}
 	if err := r.reader().Get(ctx, key, host); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return errHostTerminating
 		}
-		return false, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("failed to re-read the host: %w", err)
 	}
-	return !host.DeletionTimestamp.IsZero(), nil
+	if !host.DeletionTimestamp.IsZero() {
+		return errHostTerminating
+	}
+	return nil
+}
+
+// haltHelmRun ends a helm operation that helmRunWanted stopped with err, and
+// reports whether it did. Only a failed read is the operation's to report: a
+// cancelled operation's status belongs to its successor or the teardown, and a
+// terminating host's to the teardown.
+func (r *KDexHostReconciler) haltHelmRun(ctx context.Context, namespace, name, hash string, err error, log logr.Logger) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, errHostTerminating):
+		log.V(2).Info("host is terminating; the helm operation stops here", "namespace", namespace, "name", name)
+	case ctx.Err() != nil:
+		log.V(2).Info("helm operation cancelled; it stops here", "namespace", namespace, "name", name)
+	default:
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+	}
+	return true
 }
 
 // reader is APIReader, or Client when none is set.
@@ -231,7 +247,18 @@ func (r *KDexHostReconciler) computeHelmReleaseHash(host *kdexv1alpha1.KDexHost)
 	return fmt.Sprintf("%x", hash), nil
 }
 
-func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName, cancel context.CancelFunc, hash string) bool {
+// registerHelmRun makes the helm operation for hash the host's active one,
+// cancelling any other, and counts it as running. done undoes both and
+// releases the operation's context, and must be called when the goroutine
+// running the operation returns. ok is false, and nothing is registered, when
+// an operation for the same hash is already active.
+//
+// The two are registered as a pair, before the goroutine starts, because they
+// end differently: a superseding operation or a teardown takes the active
+// entry away while the goroutine may still be inside a Helm call, which takes
+// no context, but the run count lasts until the goroutine returns. Teardown
+// waits on the count.
+func (r *KDexHostReconciler) registerHelmRun(key types.NamespacedName, cancel context.CancelFunc, hash string) (done func(), ok bool) {
 	r.mu.Lock()
 	if r.activeHelmOperations == nil {
 		r.activeHelmOperations = make(map[types.NamespacedName]helmOperation)
@@ -239,7 +266,7 @@ func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName,
 	if old, active := r.activeHelmOperations[key]; active {
 		if old.hash == hash {
 			r.mu.Unlock()
-			return false
+			return nil, false
 		}
 		// Cancel old generation if it's still running
 		// We do this outside the lock to avoid any potential deadlock if cancel()
@@ -250,18 +277,44 @@ func (r *KDexHostReconciler) trySetHelmOperationActive(key types.NamespacedName,
 		r.mu.Lock()
 	}
 	r.activeHelmOperations[key] = helmOperation{cancel, hash}
+	if r.helmRuns == nil {
+		r.helmRuns = make(map[types.NamespacedName]int)
+	}
+	r.helmRuns[key]++
 	r.mu.Unlock()
-	return true
-}
 
-func (r *KDexHostReconciler) clearHelmOperationActive(key types.NamespacedName, hash string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.activeHelmOperations != nil {
+	return func() {
+		r.mu.Lock()
 		if op, exists := r.activeHelmOperations[key]; exists && op.hash == hash {
 			delete(r.activeHelmOperations, key)
 		}
+		if r.helmRuns[key]--; r.helmRuns[key] <= 0 {
+			delete(r.helmRuns, key)
+		}
+		r.mu.Unlock()
+		cancel()
+	}, true
+}
+
+// startHelmRun registers the helm operation for hash and runs it in a new
+// goroutine, returning false when one for the same hash is already active.
+func (r *KDexHostReconciler) startHelmRun(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	namespace, name string,
+	hash string,
+	secrets kdexv1alpha1.Secrets,
+	log logr.Logger,
+) bool {
+	done, ok := r.registerHelmRun(types.NamespacedName{Namespace: namespace, Name: name}, cancel, hash)
+	if !ok {
+		return false
 	}
+	go func() {
+		defer done()
+		r.runAsyncHelmReconcile(ctx, namespace, name, hash, secrets, log)
+	}()
+	return true
 }
 
 // cancelHelmOperation cancels and forgets any in-flight Helm operation for the
@@ -414,8 +467,8 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 
 	// The companion record is the helm operation's to write, and this host's
 	// snapshot may predate the last one: carry the server's forward (#46).
-	if rec, ok := companionRecord(latestHost); ok {
-		host.Status.Attributes[AttributeCompanionReleases] = formatCompanionRecord(rec)
+	if _, ok := companionRecord(latestHost); ok {
+		host.Status.Attributes[AttributeCompanionReleases] = latestHost.Status.Attributes[AttributeCompanionReleases]
 	}
 
 	// We need to update the status now before starting the goroutine.
@@ -431,13 +484,11 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 
 	// Start the goroutine with a tracked context
 	asyncCtx, cancel := context.WithCancel(r.Ctx)
-	if !r.trySetHelmOperationActive(key, cancel, currentHash) {
+	if !r.startHelmRun(asyncCtx, cancel, host.Namespace, host.Name, currentHash, secrets, log) {
 		cancel()
 		log.V(2).Info("reconcileHelmReleases#5", "host", host.Name, "namespace", host.Namespace, "msg", "already active")
 		return controllerutil.OperationResultNone, nil
 	}
-
-	go r.runAsyncHelmReconcile(asyncCtx, host.Namespace, host.Name, currentHash, secrets, log)
 
 	return controllerutil.OperationResultUpdated, nil
 }
@@ -480,13 +531,12 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 ) {
 	log.V(2).Info("runAsyncHelmReconcile#1", "namespace", namespace, "name", name)
 	key := types.NamespacedName{Namespace: namespace, Name: name}
-	defer r.beginHelmRun(key)()
 
-	// Fetch a fresh copy of the host
+	// The cached copy is enough to get started: the host is read again, live,
+	// once a render slot is held, and that read decides whether to proceed.
 	host := &kdexv1alpha1.KDexHost{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, host); err != nil {
+	if err := r.Get(ctx, key, host); err != nil {
 		log.Error(err, "failed to get host", "namespace", namespace, "name", name)
-		r.clearHelmOperationActive(client.ObjectKey{Namespace: namespace, Name: name}, hash)
 		return // Host might have been deleted
 	}
 
@@ -504,7 +554,6 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	release, ok := r.acquireHelmRenderSlot(ctx)
 	if !ok {
 		log.V(2).Info("helm render cancelled while waiting for a render slot", "namespace", namespace, "name", name)
-		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
 		return
 	}
 	defer release()
@@ -523,12 +572,10 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 			log.Error(err, "failed to re-read host after acquiring a render slot", "namespace", namespace, "name", name)
 		}
 		log.V(2).Info("host is gone; abandoning queued helm render", "namespace", namespace, "name", name)
-		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
 		return
 	}
 	if !host.DeletionTimestamp.IsZero() {
 		log.V(2).Info("host is terminating; abandoning queued helm render", "namespace", namespace, "name", name)
-		r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
 		return
 	}
 
@@ -574,12 +621,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 			// Teardown waits for this goroutine, so once the host is
 			// terminating install nothing more: anything installed now only
 			// delays the teardown that has to remove it.
-			if terminating, err := r.hostTerminating(ctx, key); err != nil || terminating {
-				if err != nil {
-					log.Error(err, "failed to re-read host before installing a companion", "namespace", namespace, "name", name)
-				}
-				log.V(2).Info("host is terminating; installing no more companions", "namespace", namespace, "name", name)
-				r.clearHelmOperationActive(key, hash)
+			if r.haltHelmRun(ctx, namespace, name, hash, r.helmRunWanted(ctx, key), log) {
 				return
 			}
 			if err := r.reconcileCompanionChart(c, host, companion); err != nil {
@@ -606,7 +648,19 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	// no release of the host's carries it, so it has nothing left to authorize
 	// but the uninstall of a release forged under its name. That needs the
 	// labelled set, so a prune that could not list releases forgets nothing.
-	pruned, labelled, err := r.pruneCompanionCharts(c, host, hostReleases, log)
+	//
+	// A terminating host prunes nothing, and stops pruning the moment it is
+	// seen terminating: teardown uninstalls every recorded release anyway,
+	// and waits for this goroutine to do it. What a stopped prune removed
+	// stays recorded, harmlessly: with no release, nothing carries its label.
+	if r.haltHelmRun(ctx, namespace, name, hash, r.helmRunWanted(ctx, key), log) {
+		return
+	}
+	pruned, labelled, err := r.pruneCompanionCharts(c, host, hostReleases, func() error { return r.helmRunWanted(ctx, key) }, log)
+	if errors.Is(err, errHostTerminating) || ctx.Err() != nil {
+		r.haltHelmRun(ctx, namespace, name, hash, err, log)
+		return
+	}
 	change := companionRecordChange{added: declared, pruned: pruned}
 	if labelled != nil {
 		change.stale = staleCompanions(recordedCompanions(host), declaredCompanions(host), labelled)
@@ -704,8 +758,6 @@ func (r *KDexHostReconciler) kdexHostNames(ctx context.Context, namespace string
 // when the outcome is written; nil leaves the record as it is.
 func (r *KDexHostReconciler) updateHelmStatus(ctx context.Context, namespace, name string, hash string, err error, recordChange *companionRecordChange, log logr.Logger) {
 	log.V(2).Info("updateHelmStatus", "hash", hash, "err", err)
-
-	defer r.clearHelmOperationActive(types.NamespacedName{Namespace: namespace, Name: name}, hash)
 
 	_, patchErr := r.patchHostStatus(ctx, client.ObjectKey{Namespace: namespace, Name: name}, func(host *kdexv1alpha1.KDexHost) bool {
 		setHelmOutcome(host, hash, r.ControllerID, err)
@@ -899,7 +951,10 @@ func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClient
 // namespace can label, and the operator's own record in status can name a
 // release since taken over. A release is pruned only when both name it, and
 // never when it is a KDexHost's own release.
-func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) ([]string, map[string]struct{}, error) {
+//
+// proceed, when not nil, is asked before each uninstall whether to go on; the
+// prune stops with its error.
+func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, proceed func() error, log logr.Logger) ([]string, map[string]struct{}, error) {
 	owned, labelled, err := ownedCompanions(helmClient, host, recordedCompanions(host), hostReleases, log)
 	if err != nil {
 		return nil, nil, err
@@ -910,6 +965,11 @@ func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInt
 	for _, releaseName := range owned {
 		if _, stillDeclared := declared[releaseName]; stillDeclared {
 			continue
+		}
+		if proceed != nil {
+			if err := proceed(); err != nil {
+				return pruned, labelled, err
+			}
 		}
 		log.V(1).Info("pruning companion chart no longer declared", "release", releaseName, "host", host.Name)
 		if err := helmClient.Uninstall(releaseName); err != nil {

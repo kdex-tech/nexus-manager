@@ -53,8 +53,18 @@ const (
 	hostFinalizerName = "kdex.dev/kdex-nexus-host-finalizer"
 	hostIndexKey      = "spec.hostRef.name"
 	// helmTeardownPoll is how soon a teardown waiting on an in-flight helm
-	// operation looks again.
+	// operation looks again when RequeueDelay does not say. Nothing else wakes
+	// it: an operation that stops because its host is terminating writes no
+	// status, so no event follows its end.
 	helmTeardownPoll = time.Second
+	// helmTeardownWaitCap is how long after a host's deletion began its
+	// teardown waits on an in-flight helm operation before going ahead
+	// without it. Once the host is terminating the operation starts no
+	// further Helm call, so it is past this only if the call it is in has
+	// outlived every deadline it has: a chart fetch of a few registry or
+	// repository requests of at most ChartFetchTimeout each, then the call
+	// itself, at most HelmCallTimeout.
+	helmTeardownWaitCap = utils.HelmCallTimeout + 3*utils.ChartFetchTimeout + time.Minute
 )
 
 type helmOperation struct {
@@ -184,6 +194,14 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.V(2).Info("status", "status", host.Status, "err", err, "res", res)
 	}()
 
+	// A teardown waits out an in-flight helm operation before it reads
+	// anything else, so each look while it waits costs only this.
+	if !host.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(&host, hostFinalizerName) {
+		if requeue, wait := r.awaitHelmRunBeforeTeardown(&host, log); wait {
+			return requeue, nil
+		}
+	}
+
 	secrets, err := ResolveSecrets(ctx, r.Client, &host.Status, host.Namespace, host.Spec.SecretSelector)
 	if err != nil {
 		kdexv1alpha1.SetConditions(
@@ -275,28 +293,17 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// left in the cluster that references them. Requeue instead and let
 			// the next pass retry -- uninstall is idempotent, and Helm purges an
 			// already-uninstalled release without error.
-			// Stop any render still queued for this host before tearing its
-			// releases down, so it cannot re-install them afterwards.
-			r.cancelHelmOperation(req.NamespacedName)
-
-			// The cancel cannot stop a goroutine already inside a Helm call,
-			// which takes no context. One installing a companion has no
-			// release record for it yet, so the label listing below would not
-			// find it, and the install would land after the finalizer is gone:
-			// labelled for a host that no longer exists. Wait for it to return
-			// -- it installs nothing more once it sees the host terminating.
-			if r.helmRunInFlight(req.NamespacedName) {
-				log.V(1).Info("waiting for an in-flight helm operation before tearing down", "host", host.Name)
-				return ctrl.Result{RequeueAfter: helmTeardownPoll}, nil
-			}
-
-			// Teardown acts on the companion record as it stands now, which
-			// the operation that just returned may have written after the
-			// cache last saw the host.
+			//
+			// The rest of teardown works on the host as the cluster holds it:
+			// it acts on the companion record, which the helm operation just
+			// waited out may have written after the cache last saw the host,
+			// and it removes the finalizer by an update the cache's
+			// resourceVersion would make conflict.
 			live := &kdexv1alpha1.KDexHost{}
 			if err := r.reader().Get(ctx, req.NamespacedName, live); err != nil {
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
+			host = *live
 
 			var uninstallErrs []error
 
@@ -311,7 +318,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			// that deleted the host cannot outlive the CR.
 			hostReleases, err := r.kdexHostNames(ctx, host.Namespace)
 			if err == nil {
-				err = r.uninstallCompanionCharts(c, live, hostReleases, log)
+				err = r.uninstallCompanionCharts(c, &host, hostReleases, log)
 			}
 			if err != nil {
 				log.Error(err, "failed to uninstall companion releases", "host", host.Name)
@@ -695,13 +702,7 @@ func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, func(rawObj client.Object) []string {
-		utilityPage := rawObj.(*kdexv1alpha1.KDexInternalUtilityPage)
-		if utilityPage.Spec.HostRef.Name == "" {
-			return nil
-		}
-		return []string{utilityPage.Spec.HostRef.Name}
-	}); err != nil {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, indexInternalUtilityPageByHost); err != nil {
 		return err
 	}
 
@@ -918,4 +919,57 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	}
 
 	return cached.client, nil
+}
+
+// awaitHelmRunBeforeTeardown stops any helm operation queued for a terminating
+// host, and reports whether its teardown must wait -- and when to look again --
+// for one already running.
+//
+// The cancel stops a render still queued for a slot, so it cannot re-install
+// what teardown removes. It cannot stop a goroutine already inside a Helm call,
+// which takes no context. One installing a companion has no release record for
+// it yet, so teardown's label listing would not find it, and the install would
+// land after the finalizer is gone: labelled for a host that no longer exists.
+// So teardown waits for it to return -- it starts no further Helm call once it
+// sees the host terminating -- and says so on the host. But not forever: past
+// helmTeardownWaitCap the call has outlived every deadline it has, and a
+// deletion held on it would be held by whoever controls the chart's registry.
+func (r *KDexHostReconciler) awaitHelmRunBeforeTeardown(host *kdexv1alpha1.KDexHost, log logr.Logger) (ctrl.Result, bool) {
+	key := client.ObjectKeyFromObject(host)
+	r.cancelHelmOperation(key)
+	if !r.helmRunInFlight(key) {
+		return ctrl.Result{}, false
+	}
+	if waited := time.Since(host.DeletionTimestamp.Time); waited > helmTeardownWaitCap {
+		log.Info("tearing down despite an in-flight helm operation; a release it is still installing may be left behind",
+			"host", host.Name, "namespace", host.Namespace, "waited", waited.String())
+		return ctrl.Result{}, false
+	}
+	log.V(1).Info("waiting for an in-flight helm operation before tearing down", "host", host.Name)
+	kdexv1alpha1.SetConditions(
+		&host.Status.Conditions,
+		kdexv1alpha1.ConditionStatuses{
+			Degraded:    metav1.ConditionFalse,
+			Progressing: metav1.ConditionTrue,
+			Ready:       metav1.ConditionFalse,
+		},
+		kdexv1alpha1.ConditionReasonReconciling,
+		fmt.Sprintf("Deletion is waiting for an in-flight Helm operation to finish before uninstalling this host's releases "+
+			"(for at most %s after deletion began).", helmTeardownWaitCap),
+	)
+	poll := r.RequeueDelay
+	if poll <= 0 {
+		poll = helmTeardownPoll
+	}
+	return ctrl.Result{RequeueAfter: poll}, true
+}
+
+// indexInternalUtilityPageByHost indexes a KDexInternalUtilityPage by the host
+// it belongs to, which teardown lists them by.
+func indexInternalUtilityPageByHost(rawObj client.Object) []string {
+	utilityPage := rawObj.(*kdexv1alpha1.KDexInternalUtilityPage)
+	if utilityPage.Spec.HostRef.Name == "" {
+		return nil
+	}
+	return []string{utilityPage.Spec.HostRef.Name}
 }

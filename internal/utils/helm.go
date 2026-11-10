@@ -15,6 +15,7 @@ import (
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
 	"helm.sh/helm/v4/pkg/cli"
+	"helm.sh/helm/v4/pkg/getter"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
 	"helm.sh/helm/v4/pkg/release"
@@ -32,6 +33,19 @@ const (
 	// Matches the Helm CLI's own --history-max default, which the SDK does not
 	// apply on its own.
 	defaultMaxHistory = 10
+
+	// HelmCallTimeout bounds what a Helm install, upgrade or uninstall waits
+	// for once its chart is in hand: hooks, and an uninstall's foreground
+	// deletion.
+	HelmCallTimeout = 5 * time.Minute
+
+	// ChartFetchTimeout bounds every request to a chart registry, as Helm's
+	// own getter.DefaultHTTPTimeout bounds every request to a classic
+	// (http/https) chart repository. A chart reference is tenant input, so a
+	// registry that accepts the connection and never answers must not hold
+	// the helm operation -- its render slot, and a teardown waiting on it --
+	// indefinitely.
+	ChartFetchTimeout = getter.DefaultHTTPTimeout * time.Second
 )
 
 // ChartSpec defines the parameters for a Helm chart installation or upgrade.
@@ -228,7 +242,7 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 func (h *HelmClient) Uninstall(releaseName string) error {
 	client := action.NewUninstall(h.actionConfig)
 	client.DisableHooks = true
-	client.Timeout = 5 * time.Minute
+	client.Timeout = HelmCallTimeout
 	client.DeletionPropagation = "foreground"
 	client.WaitStrategy = kube.StatusWatcherStrategy
 
@@ -240,12 +254,39 @@ func (h *HelmClient) Uninstall(releaseName string) error {
 }
 
 func (h *HelmClient) registryBind(spec *ChartSpec) error {
+	options, err := registryClientOptions(spec.ChartName, h.secrets, h.settings.Debug, ChartFetchTimeout)
+	if err != nil {
+		return err
+	}
+
+	regClient, err := registry.NewClient(options...)
+	if err != nil {
+		return fmt.Errorf("failed to create registry client: %w", err)
+	}
+	h.actionConfig.RegistryClient = regClient
+
+	return nil
+}
+
+// registryClientOptions configures the registry client for chartName's
+// registry, with the credentials and transport settings of the Helm secret
+// that matches it, and a deadline of timeout on every request.
+//
+// The deadline is ours to set. Helm v4 (pinned at v4.1.3; unchanged through
+// v4.3.1, the latest) builds a registry client's default http.Client without a
+// Timeout and has no option for one, and LocateChart hands the OCI getter this
+// client rather than one built from its own getter.WithTimeout default. So
+// every option set here carries an http.Client with a Timeout, and the
+// authorizer -- which oras routes every request through, and which uses
+// http.DefaultClient when its Client is unset -- carries the same client.
+// Delete this once Helm gives a registry client a default timeout.
+func registryClientOptions(chartName string, secrets kdexv1alpha1.Secrets, debug bool, timeout time.Duration) ([]registry.ClientOption, error) {
 	options := []registry.ClientOption{
-		registry.ClientOptDebug(h.settings.Debug),
+		registry.ClientOptDebug(debug),
 		registry.ClientOptEnableCache(true),
 	}
 
-	reg := spec.ChartName
+	reg := chartName
 	idx := strings.Index(reg, "//")
 
 	if idx > -1 {
@@ -257,16 +298,16 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 	}
 	registryURL, err := url.Parse(reg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if registryURL.Host == "" {
-		return fmt.Errorf("could not identify host from chartName: %s", spec.ChartName)
+		return nil, fmt.Errorf("could not identify host from chartName: %s", chartName)
 	}
 
 	reg = fmt.Sprintf("%s%s", registryURL.Host, registryURL.Path)
 
-	match := h.secrets.Find(func(s corev1.Secret) bool {
+	match := secrets.Find(func(s corev1.Secret) bool {
 		if s.Annotations["kdex.dev/secret-type"] != "helm" {
 			return false
 		}
@@ -279,25 +320,33 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 		return registryMatches(reg, repo)
 	})
 
+	httpClient := &http.Client{
+		Transport: registry.NewTransport(debug),
+		Timeout:   timeout,
+	}
 	if match != nil {
 		if string(match.Data["plainHTTP"]) == trueVal {
 			options = append(options, registry.ClientOptPlainHTTP())
 		}
 
 		if string(match.Data["plainHTTP"]) == trueVal || string(match.Data["insecure"]) == trueVal {
-			httpClient := &http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{
-						InsecureSkipVerify: true,
-					},
+			httpClient.Transport = &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
 				},
 			}
-			options = append(options, registry.ClientOptHTTPClient(httpClient))
 		}
+	}
+	options = append(options, registry.ClientOptHTTPClient(httpClient))
 
+	if match != nil {
 		if len(match.Data["username"]) > 0 && len(match.Data["password"]) > 0 {
 			options = append(options, registry.ClientOptAuthorizer(
 				auth.Client{
+					// Without it the authorizer sends every request through
+					// http.DefaultClient: no deadline, and none of the
+					// transport settings above.
+					Client: httpClient,
 					Credential: func(ctx context.Context, hostport string) (auth.Credential, error) {
 						return auth.Credential{
 							Password: string(match.Data["password"]),
@@ -309,13 +358,7 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 		}
 	}
 
-	regClient, err := registry.NewClient(options...)
-	if err != nil {
-		return fmt.Errorf("failed to create registry client: %w", err)
-	}
-	h.actionConfig.RegistryClient = regClient
-
-	return nil
+	return options, nil
 }
 
 // registryMatches reports whether a chart registry reference (host[/path], with
@@ -376,7 +419,7 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 	// failed hook) still errors from Run. Only "did the pods become ready"
 	// moves, and it moves to the mechanism that already owned it.
 	client.WaitStrategy = kube.HookOnlyStrategy
-	client.Timeout = 5 * time.Minute
+	client.Timeout = HelmCallTimeout
 	client.Labels = spec.Labels
 
 	if spec.Version != "" {
@@ -431,7 +474,7 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 	// failed hook) still errors from Run. Only "did the pods become ready"
 	// moves, and it moves to the mechanism that already owned it.
 	client.WaitStrategy = kube.HookOnlyStrategy
-	client.Timeout = 5 * time.Minute
+	client.Timeout = HelmCallTimeout
 	client.Labels = spec.Labels
 	// The Helm SDK default is UNLIMITED history -- `--history-max=10` is a CLI
 	// default that does not reach the SDK. Left unset, every reconcile-driven

@@ -15,10 +15,18 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"kdex.dev/crds/configuration"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
+
+// withTeardownIndexes registers the indexes a host's teardown lists its
+// internal pages and translations by, as SetupWithManager does. b must
+// already have its scheme.
+func withTeardownIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
+	return b.
+		WithIndex(&kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, indexInternalUtilityPageByHost).
+		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, indexInternalTranslationByHost)
+}
 
 // stuckUninstallHelmClient models a release whose teardown cannot complete --
 // e.g. a PVC held by a terminating pod, which makes Helm's foreground deletion
@@ -64,12 +72,9 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 		},
 	}
 
-	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
+	fc := withTeardownIndexes(fake.NewClientBuilder().WithScheme(scheme)).
 		WithObjects(host).
 		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
-		WithIndex(&kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, func(client.Object) []string { return nil }).
-		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, func(client.Object) []string { return nil }).
 		Build()
 
 	r := &KDexHostReconciler{
