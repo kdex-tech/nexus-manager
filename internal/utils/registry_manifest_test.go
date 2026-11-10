@@ -66,7 +66,9 @@ func forgedSizeRegistry(layerSize int64) http.Handler {
 // is only a claim. oras-go before v2.7.0 allocated that claim before reading a
 // byte, so a manifest of a few hundred bytes declaring 2^62 panicked the
 // operator -- in a goroutine of oras's own, which nothing can recover -- and
-// one declaring a terabyte ran it out of memory. The pull fails instead.
+// one declaring a terabyte ran it out of memory. The pull fails instead. A
+// regression crashes this test binary rather than failing the test: the panic
+// is in oras's goroutine, out of reach of any recover here.
 func TestRegistryClient_RefusesAForgedLayerSize(t *testing.T) {
 	srv := httptest.NewServer(forgedSizeRegistry(1 << 62))
 	defer srv.Close()
@@ -80,26 +82,14 @@ func TestRegistryClient_RefusesAForgedLayerSize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	type outcome struct {
-		err      error
-		panicked any
-	}
-	done := make(chan outcome, 1)
+	done := make(chan error, 1)
 	go func() {
-		defer func() {
-			if p := recover(); p != nil {
-				done <- outcome{panicked: p}
-			}
-		}()
 		_, err := c.Pull(host + "/charts/huge:1.0.0")
-		done <- outcome{err: err}
+		done <- err
 	}()
 	select {
-	case o := <-done:
-		if o.panicked != nil {
-			t.Fatalf("pulling a chart whose manifest forges its layer size panicked: %v", o.panicked)
-		}
-		if o.err == nil {
+	case err := <-done:
+		if err == nil {
 			t.Fatal("pulling a chart whose manifest forges its layer size succeeded")
 		}
 	case <-time.After(20 * time.Second):
