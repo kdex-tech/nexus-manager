@@ -248,9 +248,9 @@ func TestHelmRetryBackoff(t *testing.T) {
 	}
 }
 
-// sameRun stamps host with what reconcileHelmReleases compares to tell a
+// stampRun stamps host with what reconcileHelmReleases compares to tell a
 // retry from a new run: the spec's hash and the resolved Secrets' hash.
-func sameRun(t *testing.T, host *kdexv1alpha1.KDexHost, status string, attempts int, lastAttempt time.Time) *kdexv1alpha1.KDexHost {
+func stampRun(t *testing.T, host *kdexv1alpha1.KDexHost, status string, attempts int, lastAttempt time.Time) *kdexv1alpha1.KDexHost {
 	t.Helper()
 	probe, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil)
 	hash, err := probe.computeHelmReleaseHash(host)
@@ -259,14 +259,14 @@ func sameRun(t *testing.T, host *kdexv1alpha1.KDexHost, status string, attempts 
 	}
 	host.Status.Attributes[AttributeHelmReleaseStatus] = status
 	host.Status.Attributes[AttributeHelmReleaseHash] = hash
-	host.Status.Attributes[AttributeHelmReleaseSecretsHash] = utils.Hash(kdexv1alpha1.Secrets(nil))
+	host.Status.Attributes[AttributeHelmReleaseSecretsHash] = utils.HashSecrets(nil)
 	host.Status.Attributes[AttributeHelmReleaseAttempts] = strconv.Itoa(attempts)
 	host.Status.Attributes[AttributeHelmReleaseLastAttempt] = lastAttempt.UTC().Format(time.RFC3339)
 	return host
 }
 
 func TestHelmReconcile_BacksOffRepeatedFailures(t *testing.T) {
-	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 3, time.Now().Add(-2*time.Minute))
+	host := stampRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 3, time.Now().Add(-2*time.Minute))
 	r, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
 	r.RequeueDelay = time.Minute
 
@@ -285,7 +285,7 @@ func TestHelmReconcile_BacksOffRepeatedFailures(t *testing.T) {
 // finds a zombie. Restarting it at once would crash-loop the operator. Each
 // attempt is counted when it starts, and a zombie backs off like a failure.
 func TestHelmReconcile_BacksOffACrashLoop(t *testing.T) {
-	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusInProgress, 2, time.Now())
+	host := stampRun(t, recorded(helmHost("my-host")), HelmStatusInProgress, 2, time.Now())
 	r, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
 	r.RequeueDelay = time.Minute
 
@@ -300,7 +300,7 @@ func TestHelmReconcile_BacksOffACrashLoop(t *testing.T) {
 }
 
 func TestHelmReconcile_CountsAnAttemptWhenItStarts(t *testing.T) {
-	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
+	host := stampRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
 	mock := newBlockingHelmClient("my-host", nil)
 	r, fc := newHelmReconciler(t, mock, nil, host)
 	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
@@ -324,7 +324,7 @@ func TestHelmReconcile_CountsAnAttemptWhenItStarts(t *testing.T) {
 // A failed attempt was counted when it started; failing does not count it
 // again.
 func TestHelmReconcile_CountsAFailedAttemptOnce(t *testing.T) {
-	host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
+	host := stampRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 2, time.Now().Add(-time.Hour))
 	mock := NewMockHelmClient(nil)
 	mock.SetFailInstall(true, "still failing")
 	r, fc := newHelmReconciler(t, mock, nil, host)
@@ -350,7 +350,7 @@ func TestHelmReconcile_StartsCountingAgainForNewSecretsOrSpec(t *testing.T) {
 		{"spec", func(h *kdexv1alpha1.KDexHost) { h.Status.Attributes[AttributeHelmReleaseHash] = "an older spec" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			host := sameRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 5, time.Now().Add(-2*time.Minute))
+			host := stampRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 5, time.Now().Add(-2*time.Minute))
 			tc.stale(host)
 			mock := newBlockingHelmClient("my-host", nil)
 			r, fc := newHelmReconciler(t, mock, nil, host)
@@ -454,7 +454,8 @@ func TestTeardown_ReadsTheClusterHostIntoAFreshObject(t *testing.T) {
 }
 
 // The helm operation owns the helm.release. attributes. A reconcile's status
-// patch takes them as the cluster holds them: a key the operation deleted --
+// patch takes them as last read, so it never writes one: a key the operation
+// deleted --
 // a success clears last-attempt and attempts -- is not restored from the
 // reconcile's own copy, which may have set it when the operation started.
 func TestTakeHelmAttributes(t *testing.T) {
@@ -479,4 +480,22 @@ func TestTakeHelmAttributes(t *testing.T) {
 	if !maps.Equal(snapshot, want) {
 		t.Errorf("attributes = %v, want %v", snapshot, want)
 	}
+}
+
+// The run's Secrets are read afresh on every reconcile. Two reads of the same
+// Secrets are the same run, and keep its backoff.
+func TestHelmReconcile_BacksOffAcrossReadsOfTheSameSecrets(t *testing.T) {
+	host := stampRun(t, recorded(helmHost("my-host")), HelmStatusFailed, 3, time.Now().Add(-2*time.Minute))
+	host.Status.Attributes[AttributeHelmReleaseSecretsHash] = utils.HashSecrets(secretsWithPassword("1", "pw"))
+	r, _ := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	r.RequeueDelay = time.Minute
+
+	op, err := r.reconcileHelmReleases(context.Background(), host.DeepCopy(), secretsWithPassword("1", "pw"), logr.Discard())
+	if err != nil {
+		t.Fatalf("reconcileHelmReleases: %v", err)
+	}
+	if op != controllerutil.OperationResultNone {
+		t.Error("a fresh read of the same Secrets was taken for new ones, and the backoff skipped")
+	}
+	awaitNoHelmRun(t, r, types.NamespacedName{Namespace: "ns", Name: "my-host"})
 }

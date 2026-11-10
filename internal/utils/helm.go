@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,28 +45,31 @@ const (
 
 	// RegistryFetchBudget bounds how long one chart operation may spend on
 	// registry requests altogether, and RegistryFetchMaxRequests how many it
-	// may make. A per-request timeout does not bound a fetch: resolving an
-	// unpinned or ranged version lists the repository's tags, page after
-	// page, each page a fast request, for as long as the registry hands out
-	// another Link -- and holds the render slot throughout.
-	RegistryFetchBudget = 5 * time.Minute
-	//
-	// It counts requests as the registry client makes them: a request the
-	// transport retries counts once.
+	// may make -- counted as the registry client makes them, so a request
+	// the transport retries counts once. A per-request timeout does not bound
+	// a fetch: resolving an unpinned or ranged version lists the repository's
+	// tags, page after page, each page a fast request, for as long as the
+	// registry hands out another Link -- and holds the render slot throughout.
+	RegistryFetchBudget      = 5 * time.Minute
 	RegistryFetchMaxRequests = 500
 
-	// RegistryFetchMaxTagListBytes bounds the bytes of tag listings one chart
-	// operation may read, and RegistryFetchMaxBytes the bytes of everything
-	// else it reads from a registry. Time and request count do not bound
-	// memory: to resolve a version range Helm keeps every semver tag of every
-	// page, several times its size on the wire, and it pulls a chart's blobs
-	// into memory whatever size they declare. Tag listings get the tighter
-	// limit for that expansion -- 2MiB is some tens of thousands of tags; a
-	// real repository lists hundreds. The other is far above any real chart
-	// archive (Helm's own host-manager chart is tens of KiB) and far below the
-	// operator's memory limit.
-	RegistryFetchMaxTagListBytes = 2 << 20
-	RegistryFetchMaxBytes        = 16 << 20
+	// RegistryFetchMaxBytes is the default bound on the bytes one chart
+	// operation may read from a registry, across every response: tag
+	// listings, manifests, tokens and blobs alike. Time and request count do
+	// not bound memory: to resolve a version range Helm keeps every semver tag
+	// of every page, and it pulls a chart's blobs into memory whatever size
+	// they declare. One budget for all of it, because the registry writes
+	// every URL the client follows -- each page's Link, each redirect -- so no
+	// path tells a blob from a tag page.
+	//
+	// Tag JSON is the worst case: measured, it retains about nine times its
+	// size in heap (16MiB of it held ~147MiB), so 4MiB costs ~37MiB, well
+	// inside the operator's memory limit. A real chart archive is far under
+	// it: KDex's own host-manager chart is tens of KiB, and nearly every
+	// public chart is under 1MiB compressed. The manager's
+	// --registry-fetch-max-bytes sets it; raising it needs the memory limit
+	// raised to match.
+	RegistryFetchMaxBytes = 4 << 20
 
 	// ChartFetchTimeout bounds every request to a chart registry, as Helm's
 	// own getter.DefaultHTTPTimeout bounds every request to a classic
@@ -112,6 +114,26 @@ type HelmClient struct {
 	namespace    string
 	mu           sync.RWMutex
 	secrets      kdexv1alpha1.Secrets
+	// maxFetchBytes overrides RegistryFetchMaxBytes when positive.
+	maxFetchBytes int64
+}
+
+// HelmClientOption configures a HelmClient.
+type HelmClientOption func(*HelmClient)
+
+// WithRegistryFetchMaxBytes bounds the bytes one chart operation may read from
+// a registry, in place of RegistryFetchMaxBytes.
+func WithRegistryFetchMaxBytes(n int64) HelmClientOption {
+	return func(h *HelmClient) { h.maxFetchBytes = n }
+}
+
+// registryLimits is defaultRegistryFetchLimits, with the client's byte budget.
+func (h *HelmClient) registryLimits() registryFetchLimits {
+	limits := defaultRegistryFetchLimits
+	if h.maxFetchBytes > 0 {
+		limits.maxBytes = h.maxFetchBytes
+	}
+	return limits
 }
 
 var _ HelmClientInterface = (*HelmClient)(nil)
@@ -121,6 +143,7 @@ func NewHelmClient(
 	namespace string,
 	secrets kdexv1alpha1.Secrets,
 	logger logr.Logger,
+	opts ...HelmClientOption,
 ) (*HelmClient, error) {
 	settings := cli.New()
 	settings.SetNamespace(namespace)
@@ -142,13 +165,17 @@ func NewHelmClient(
 		return nil, fmt.Errorf("failed to init action config: %w", err)
 	}
 
-	return &HelmClient{
+	h := &HelmClient{
 		actionConfig: actionConfig,
 		log:          logger,
 		namespace:    namespace,
 		secrets:      secrets,
 		settings:     settings,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h, nil
 }
 
 // AddRepository adds a Helm repository.
@@ -260,7 +287,7 @@ func (h *HelmClient) ListReleases(matchLabels map[string]string) ([]string, erro
 // hash of this client's resolved secrets so a cached archive is never reused
 // across a credential boundary.
 func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (string, error) {
-	key := chartPathKey(spec.ChartName, spec.Version, Hash(h.secrets))
+	key := chartPathKey(spec.ChartName, spec.Version, HashSecrets(h.secrets))
 	return sharedChartPaths.get(key, load)
 }
 
@@ -303,7 +330,7 @@ func (h *HelmClient) Uninstall(releaseName string) error {
 }
 
 func (h *HelmClient) registryBind(spec *ChartSpec) error {
-	options, err := registryClientOptions(spec.ChartName, h.secrets, h.settings.Debug, defaultRegistryFetchLimits)
+	options, err := registryClientOptions(spec.ChartName, h.secrets, h.settings.Debug, h.registryLimits())
 	if err != nil {
 		return err
 	}
@@ -319,19 +346,17 @@ func (h *HelmClient) registryBind(spec *ChartSpec) error {
 
 // registryFetchLimits bounds one chart operation's traffic to a registry.
 type registryFetchLimits struct {
-	requestTimeout  time.Duration
-	budget          time.Duration
-	maxRequests     int
-	maxTagListBytes int64
-	maxBytes        int64
+	requestTimeout time.Duration
+	budget         time.Duration
+	maxRequests    int
+	maxBytes       int64
 }
 
 var defaultRegistryFetchLimits = registryFetchLimits{
-	requestTimeout:  ChartFetchTimeout,
-	budget:          RegistryFetchBudget,
-	maxRequests:     RegistryFetchMaxRequests,
-	maxTagListBytes: RegistryFetchMaxTagListBytes,
-	maxBytes:        RegistryFetchMaxBytes,
+	requestTimeout: ChartFetchTimeout,
+	budget:         RegistryFetchBudget,
+	maxRequests:    RegistryFetchMaxRequests,
+	maxBytes:       RegistryFetchMaxBytes,
 }
 
 // registryClientOptions configures the registry client for chartName's
@@ -430,19 +455,12 @@ func registryTransport(debug, insecure bool) http.RoundTripper {
 		return registry.NewTransport(debug)
 	}
 	t, ok := http.DefaultTransport.(*http.Transport)
-	if ok {
-		t = t.Clone()
-	} else {
-		// http.DefaultTransport's own settings, should it ever be wrapped.
-		t = &http.Transport{
-			DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		}
+	if !ok {
+		// Only if something replaced http.DefaultTransport; the stdlib's
+		// zero transport is still a working one.
+		t = &http.Transport{}
 	}
+	t = t.Clone()
 	t.Proxy = nil
 	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the registry's secret asks for it
 	var base http.RoundTripper = t
@@ -457,17 +475,16 @@ var errFetchBudget = errors.New("registry fetch budget exhausted")
 
 // fetchBudget refuses every request once the fetch it belongs to has made
 // maxRequests of them, cuts off any request at the fetch's deadline, and fails
-// any read past the fetch's byte limits: maxTagListBytes across its tag
-// listings, maxBytes across the rest. One is made per registry client, and
+// any read past maxBytes across all of the fetch's responses. One is made per
+// registry client, and
 // registryBind makes a client per chart operation, so the budget is one
 // operation's.
 type fetchBudget struct {
-	next       http.RoundTripper
-	deadline   time.Time
-	limits     registryFetchLimits
-	made       atomic.Int64
-	tagBytes   atomic.Int64
-	otherBytes atomic.Int64
+	next     http.RoundTripper
+	deadline time.Time
+	limits   registryFetchLimits
+	made     atomic.Int64
+	read     atomic.Int64
 }
 
 func newFetchBudget(next http.RoundTripper, limits registryFetchLimits) *fetchBudget {
@@ -491,28 +508,22 @@ func (b *fetchBudget) RoundTrip(req *http.Request) (*http.Response, error) {
 		cancel()
 		return nil, err
 	}
-	body := &budgetedBody{ReadCloser: resp.Body, cancel: cancel, read: &b.otherBytes, limit: b.limits.maxBytes, of: "registry responses"}
-	if strings.HasSuffix(req.URL.Path, "/tags/list") {
-		body.read, body.limit, body.of = &b.tagBytes, b.limits.maxTagListBytes, "tag listings"
-	}
-	resp.Body = body
+	resp.Body = &budgetedBody{ReadCloser: resp.Body, cancel: cancel, budget: b}
 	return resp, nil
 }
 
 // budgetedBody counts what is read of a response against its fetch's byte
-// limit, and releases the response's deadline once it is closed.
+// budget, and releases the response's deadline once it is closed.
 type budgetedBody struct {
 	io.ReadCloser
 	cancel context.CancelFunc
-	read   *atomic.Int64
-	limit  int64
-	of     string
+	budget *fetchBudget
 }
 
 func (b *budgetedBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
-	if b.read.Add(int64(n)) > b.limit {
-		return n, fmt.Errorf("%w: more than %d bytes of %s", errFetchBudget, b.limit, b.of)
+	if limit := b.budget.limits.maxBytes; b.budget.read.Add(int64(n)) > limit {
+		return n, fmt.Errorf("%w: more than %d bytes", errFetchBudget, limit)
 	}
 	return n, err
 }

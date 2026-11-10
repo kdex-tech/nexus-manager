@@ -169,19 +169,20 @@ func helmAttempts(host *kdexv1alpha1.KDexHost) int {
 }
 
 // takeHelmAttributes makes the helm.release. keys of snapshot, a reconcile's
-// copy of a host's attributes, those of cluster, the host as the cluster holds
-// it, and leaves every other key alone. The async helm operation owns those
-// keys and writes them while the reconcile runs: the reconcile's copy may hold
-// values the operation has since replaced, or keys it has since deleted -- a
-// success clears last-attempt and attempts, which the run's start set -- and
-// a status patch built from that copy would put them back.
-func takeHelmAttributes(snapshot, cluster map[string]string) {
+// copy of a host's attributes, those of last, the host as last read -- the
+// read a status patch is built against -- and leaves every other key alone.
+// The patch then never writes a helm.release. key. The async helm operation
+// owns those keys and writes them while the reconcile runs: the reconcile's
+// copy may hold values the operation has since replaced, or keys it has since
+// deleted -- a success clears last-attempt and attempts, which the run's start
+// set -- and a patch built from that copy would put them back.
+func takeHelmAttributes(snapshot, last map[string]string) {
 	for k := range snapshot {
-		if _, ok := cluster[k]; !ok && strings.HasPrefix(k, helmAttributePrefix) {
+		if _, ok := last[k]; !ok && strings.HasPrefix(k, helmAttributePrefix) {
 			delete(snapshot, k)
 		}
 	}
-	for k, v := range cluster {
+	for k, v := range last {
 		if strings.HasPrefix(k, helmAttributePrefix) {
 			snapshot[k] = v
 		}
@@ -457,7 +458,7 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	// resolved Secrets. A changed Secret -- the fix for a registry that
 	// refused the last attempt's credentials -- starts a new run, with no
 	// backoff to wait out.
-	secretsHash := utils.Hash(secrets)
+	secretsHash := utils.HashSecrets(secrets)
 	sameRun := recordedHash == currentHash && latestHost.Status.Attributes[AttributeHelmReleaseSecretsHash] == secretsHash
 
 	key := client.ObjectKeyFromObject(host)

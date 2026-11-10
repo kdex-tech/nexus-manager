@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/registry"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -95,11 +96,10 @@ func TestRegistryClient_TimesOutAgainstATarpit(t *testing.T) {
 
 func testLimits(request, budget time.Duration, maxRequests int) registryFetchLimits {
 	return registryFetchLimits{
-		requestTimeout:  request,
-		budget:          budget,
-		maxRequests:     maxRequests,
-		maxTagListBytes: RegistryFetchMaxTagListBytes,
-		maxBytes:        RegistryFetchMaxBytes,
+		requestTimeout: request,
+		budget:         budget,
+		maxRequests:    maxRequests,
+		maxBytes:       RegistryFetchMaxBytes,
 	}
 }
 
@@ -277,14 +277,14 @@ func TestRegistryClient_BoundsTheBytesATagListingReads(t *testing.T) {
 	defer srv.Close()
 	host := strings.TrimPrefix(srv.URL, "http://")
 	limits := testLimits(time.Minute, time.Minute, 1_000_000)
-	limits.maxTagListBytes = 1 << 20
+	limits.maxBytes = 1 << 20
 
 	err := tagsWithin(t, host+"/charts/tarpit", helmSecret(host, map[string]string{"plainHTTP": "true"}), limits, 20*time.Second)
 	if !errors.Is(err, errFetchBudget) {
 		t.Fatalf("an endless listing of large pages = %v, want the fetch budget exhausted", err)
 	}
 	if n := served.Load(); n > 6 {
-		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped at the fifth", n)
+		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", n)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestFetchBudget_BoundsTheBytesOfAnyResponse(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	n, err := io.Copy(io.Discard, resp.Body)
 	if !errors.Is(err, errFetchBudget) {
-		t.Errorf("reading a 64MiB blob within a 1MiB budget = %v, want the fetch budget exhausted", err)
+		t.Errorf("reading a 64MiB response within a 1MiB budget = %v, want the fetch budget exhausted", err)
 	}
 	if n > 2<<20 {
 		t.Errorf("read %d bytes within a 1MiB budget", n)
@@ -336,5 +336,103 @@ func TestRegistryTransport_InsecureGoesDirect(t *testing.T) {
 	}
 	if base.DialContext == nil || base.TLSHandshakeTimeout == 0 || base.IdleConnTimeout == 0 {
 		t.Error("the insecure transport lost the default transport's dial and idle timeouts")
+	}
+}
+
+// tagPage writes one page of tags, of about pageBytes, linking to next.
+func tagPage(w http.ResponseWriter, n int64, pageBytes int, next string) {
+	var tags []string
+	for size := 0; size < pageBytes; size += 16 {
+		tags = append(tags, fmt.Sprintf(`"%d.%d.0"`, n, size))
+	}
+	w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"name":"charts/tarpit","tags":[%s]}`, strings.Join(tags, ","))
+}
+
+// listTarpit lists a tag listing served by h against a 1MiB byte budget,
+// returning the error and the pages h served.
+func listTarpit(t *testing.T, h func(served *atomic.Int64) http.Handler) (error, int64) {
+	t.Helper()
+	var served atomic.Int64
+	srv := httptest.NewServer(h(&served))
+	defer srv.Close()
+	host := strings.TrimPrefix(srv.URL, "http://")
+	limits := testLimits(time.Minute, time.Minute, 1_000_000)
+	limits.maxBytes = 1 << 20
+	err := tagsWithin(t, host+"/charts/tarpit", helmSecret(host, map[string]string{"plainHTTP": "true"}), limits, 20*time.Second)
+	return err, served.Load()
+}
+
+// The registry writes the Link a listing follows: a page linking off the
+// tag list's path is still a page of tags.
+func TestRegistryClient_TagListingBudgetFollowsLinksAnywhere(t *testing.T) {
+	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := served.Add(1)
+			tagPage(w, n, 256<<10, fmt.Sprintf("/elsewhere/page?n=%d", n))
+		})
+	})
+	if !errors.Is(err, errFetchBudget) {
+		t.Fatalf("a listing linked off the tag list's path = %v, want the fetch budget exhausted", err)
+	}
+	if pages > 6 {
+		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
+	}
+}
+
+// Nor does a redirect off the tag list's path make its pages something else.
+func TestRegistryClient_TagListingBudgetFollowsRedirects(t *testing.T) {
+	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/tags/list") {
+				http.Redirect(w, r, "/storage/page?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+				return
+			}
+			n := served.Add(1)
+			tagPage(w, n, 256<<10, fmt.Sprintf("/v2/charts/tarpit/tags/list?n=1&last=%d", n))
+		})
+	})
+	if !errors.Is(err, errFetchBudget) {
+		t.Fatalf("a listing redirected off the tag list's path = %v, want the fetch budget exhausted", err)
+	}
+	if pages > 6 {
+		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
+	}
+}
+
+// The registry writes every URL the client follows, so no path tells a blob
+// from a tag page: a listing whose Link names a blob is still a listing, and
+// the one byte budget bounds it.
+func TestRegistryClient_TagListingLinkedToABlobPathIsBounded(t *testing.T) {
+	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := served.Add(1)
+			tagPage(w, n, 256<<10, fmt.Sprintf("/v2/charts/tarpit/blobs/sha256:%064d?p=%d", n, n))
+		})
+	})
+	if !errors.Is(err, errFetchBudget) {
+		t.Fatalf("a listing linked to a blob path = %v, want the fetch budget exhausted", err)
+	}
+	if pages > 6 {
+		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
+	}
+}
+
+// The byte budget is the manager's to set.
+func TestHelmClient_TakesTheRegistryFetchByteBudget(t *testing.T) {
+	c, err := NewHelmClient("ns", nil, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.registryLimits().maxBytes; got != RegistryFetchMaxBytes {
+		t.Errorf("default byte budget = %d, want %d", got, RegistryFetchMaxBytes)
+	}
+	c, err = NewHelmClient("ns", nil, logr.Discard(), WithRegistryFetchMaxBytes(123))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.registryLimits().maxBytes; got != 123 {
+		t.Errorf("configured byte budget = %d, want 123", got)
 	}
 }

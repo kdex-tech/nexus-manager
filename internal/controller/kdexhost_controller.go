@@ -65,9 +65,10 @@ const (
 	// further Helm call, so it is past this only if the call it is in has
 	// outlived every deadline it has: a chart fetch -- at most
 	// RegistryFetchBudget from a registry, where a request under way when
-	// that runs out is cut off then, or a few requests of at most
-	// ChartFetchTimeout each (three, say) from a classic repository -- then
-	// the call itself, at most HelmCallTimeout. The minute is margin.
+	// that runs out is cut off then, or from a classic repository at most
+	// three requests -- the index, the archive, its provenance file -- of at
+	// most ChartFetchTimeout each -- then the call itself, at most
+	// HelmCallTimeout. The minute is margin.
 	helmTeardownWaitCap = max(utils.RegistryFetchBudget, 3*utils.ChartFetchTimeout) + utils.HelmCallTimeout + time.Minute
 )
 
@@ -157,8 +158,8 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 		patch := client.MergeFrom(latestHost.DeepCopy())
 
-		// The Helm status attributes are the goroutine's: take them as the
-		// cluster holds them.
+		// The Helm status attributes are the goroutine's: take them as last
+		// read, so this patch never writes a helm.release. key.
 		if host.Status.Attributes == nil {
 			host.Status.Attributes = make(map[string]string)
 		}
@@ -914,7 +915,7 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	}
 
 	key := name + "-" + namespace
-	hash := utils.Hash(secrets)
+	hash := utils.HashSecrets(secrets)
 
 	cached, ok := r.helmClients[key]
 

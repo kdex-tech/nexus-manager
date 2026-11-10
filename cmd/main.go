@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"runtime/debug"
 	"time"
@@ -74,6 +75,7 @@ func main() {
 	namedLogLevels := make(kdexlog.NamedLogLevelPairs)
 	var requeueDelaySeconds int
 	var helmRenderConcurrency int
+	var registryFetchMaxBytes int64
 	var memoryLimitRatio float64
 	var pprofAddr string
 
@@ -93,6 +95,11 @@ func main() {
 	flag.IntVar(&helmRenderConcurrency, "helm-render-concurrency", 1, "Maximum number of host-manager Helm renders that may run "+
 		"concurrently across the fleet. Helm renders load the chart into the operator heap, so this bounds peak render memory "+
 		"independent of fleet size. A value <= 0 means unbounded.")
+	flag.Int64Var(&registryFetchMaxBytes, "registry-fetch-max-bytes", utils.RegistryFetchMaxBytes, "Maximum bytes one "+
+		"chart operation may read from an OCI registry, across every response: tag listings, manifests and blobs alike. "+
+		"A companion chart is tenant input, and Helm holds what it reads in memory -- tag listings at about nine times "+
+		"their size -- so this bounds what a registry can make the operator allocate. Raising it needs the memory limit "+
+		"raised to match. Must be positive.")
 	flag.Float64Var(&memoryLimitRatio, "memory-limit-ratio", 0.9, "Fraction of the container's cgroup memory limit to "+
 		"install as Go's soft memory limit (GOMEMLIMIT), so the garbage collector applies backpressure before the kernel "+
 		"OOMKills the process. This is the last-resort safety net under the bound set by --helm-render-concurrency: "+
@@ -132,6 +139,13 @@ func main() {
 		panic(err)
 	}
 	ctrl.SetLogger(logger)
+
+	// A budget of zero or less would bound nothing: refuse it, as a typo in
+	// --memory-limit-ratio is refused below, rather than start unprotected.
+	if registryFetchMaxBytes <= 0 {
+		setupLog.Error(fmt.Errorf("%d is not positive", registryFetchMaxBytes), "invalid --registry-fetch-max-bytes")
+		os.Exit(1)
+	}
 
 	// A render spike that OOMKills the operator can wedge a Helm release in
 	// pending-upgrade, so trade GC CPU for survival before the kernel decides.
@@ -284,7 +298,7 @@ func main() {
 		ControllerID:  hostname,
 		Ctx:           ctx,
 		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
-			return utils.NewHelmClient(namespace, secrets, logger)
+			return utils.NewHelmClient(namespace, secrets, logger, utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes))
 		},
 		HelmRenderConcurrency: helmRenderConcurrency,
 		RequeueDelay:          requeueDelay,

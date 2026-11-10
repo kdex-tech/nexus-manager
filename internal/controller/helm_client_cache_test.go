@@ -18,11 +18,21 @@ func (s *stubHelmClient) Uninstall(string) error                  { return nil }
 
 func (s *stubHelmClient) ListReleases(map[string]string) ([]string, error) { return nil, nil }
 
-func secretsWithPassword(pw string) kdexv1alpha1.Secrets {
+// secretsWithPassword is the registry Secret at resourceVersion, as the cache
+// returns it: owned by the controller that keeps it, whose deletion it blocks
+// (pointer fields, as External Secrets sets them), and freshly copied.
+func secretsWithPassword(resourceVersion, pw string) kdexv1alpha1.Secrets {
+	yes := true
 	return kdexv1alpha1.Secrets{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "ns"},
-			Data:       map[string][]byte{"password": []byte(pw)},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "creds", Namespace: "ns", ResourceVersion: resourceVersion,
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: "external-secrets.io/v1", Kind: "ExternalSecret", Name: "creds", UID: "u",
+					Controller: &yes, BlockOwnerDeletion: &yes,
+				}},
+			},
+			Data: map[string][]byte{"password": []byte(pw)},
 		},
 	}
 }
@@ -40,7 +50,7 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 		},
 	}
 
-	old := secretsWithPassword("old-password")
+	old := secretsWithPassword("1", "old-password")
 
 	c1, err := r.getOrCreateHelmClient("host", "ns", old, logr.Discard())
 	if err != nil {
@@ -50,8 +60,9 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 		t.Fatalf("expected factory to be called once, got %d", calls)
 	}
 
-	// Same secrets -> cached client is reused, factory not called again.
-	c1b, err := r.getOrCreateHelmClient("host", "ns", old, logr.Discard())
+	// Same secrets, read again -> cached client is reused, factory not called
+	// again. Every reconcile reads a fresh copy of the host's Secrets.
+	c1b, err := r.getOrCreateHelmClient("host", "ns", secretsWithPassword("1", "old-password"), logr.Discard())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,8 +73,9 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 		t.Fatalf("expected the same cached client instance for unchanged secrets")
 	}
 
-	// Rotated credentials -> a fresh client must be built.
-	rotated := secretsWithPassword("new-password")
+	// Rotated credentials -> a fresh client must be built. Updating the
+	// Secret bumped its resourceVersion.
+	rotated := secretsWithPassword("2", "new-password")
 	c2, err := r.getOrCreateHelmClient("host", "ns", rotated, logr.Discard())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
