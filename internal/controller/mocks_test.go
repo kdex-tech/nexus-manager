@@ -68,6 +68,13 @@ func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 		time.Sleep(delay)
 	}
 
+	// The chart is in hand: as the real client does, ask whether to go on.
+	if spec.Proceed != nil {
+		if err := spec.Proceed(); err != nil {
+			return err
+		}
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -115,6 +122,11 @@ func (m *MockHelmClient) Uninstall(releaseName string) error {
 		return fmt.Errorf("failed to uninstall release %s: timed out waiting for deletion", releaseName)
 	}
 
+	// As the real client: a release that does not exist is uninstalled, and
+	// nothing was removed.
+	if _, exists := m.releaseLabels[releaseName]; !exists {
+		return nil
+	}
 	m.uninstalledCharts = append(m.uninstalledCharts, releaseName)
 	delete(m.releaseLabels, releaseName)
 	return nil

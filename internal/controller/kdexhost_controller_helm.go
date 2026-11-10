@@ -44,6 +44,7 @@ const (
 	AttributeHelmReleaseError       = helmAttributePrefix + "error"
 	AttributeHelmReleaseOwner       = helmAttributePrefix + "owner"
 	AttributeHelmReleaseLastAttempt = helmAttributePrefix + "last-attempt"
+	AttributeHelmReleaseFailures    = helmAttributePrefix + "failures"
 	// AttributeCompanionReleases records, comma-separated and sorted, every
 	// companion release this operator has installed (or is about to: a name
 	// is recorded before its install) for the host and not removed since. It
@@ -87,28 +88,36 @@ var errHostTerminating = errors.New("host is terminating")
 // host is gone or terminating (errHostTerminating), or the host could not be
 // read. It reads the host live, since a cache can predate the deletion it is
 // there to notice.
-func (r *KDexHostReconciler) helmRunWanted(ctx context.Context, key types.NamespacedName) error {
+//
+// The host it read is returned with a nil error.
+func (r *KDexHostReconciler) helmRunWanted(ctx context.Context, key types.NamespacedName) (*kdexv1alpha1.KDexHost, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	host := &kdexv1alpha1.KDexHost{}
 	if err := r.reader().Get(ctx, key, host); err != nil {
 		if apierrors.IsNotFound(err) {
-			return errHostTerminating
+			return nil, errHostTerminating
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			return nil, ctxErr
 		}
-		return fmt.Errorf("failed to re-read the host: %w", err)
+		return nil, fmt.Errorf("failed to re-read the host: %w", err)
 	}
 	if !host.DeletionTimestamp.IsZero() {
-		return errHostTerminating
+		return nil, errHostTerminating
 	}
-	return nil
+	return host, nil
 }
 
-// haltHelmRun ends a helm operation that helmRunWanted stopped with err, and
-// reports whether it did. Only a failed read is the operation's to report: a
+// stillWanted is helmRunWanted's verdict alone, for a check between steps.
+func (r *KDexHostReconciler) stillWanted(ctx context.Context, key types.NamespacedName) error {
+	_, err := r.helmRunWanted(ctx, key)
+	return err
+}
+
+// haltHelmRun ends a helm operation that a step stopped with err, and reports
+// whether it did. A failed read or Helm call is the operation's to report: a
 // cancelled operation's status belongs to its successor or the teardown, and a
 // terminating host's to the teardown.
 func (r *KDexHostReconciler) haltHelmRun(ctx context.Context, namespace, name, hash string, err error, log logr.Logger) bool {
@@ -123,6 +132,39 @@ func (r *KDexHostReconciler) haltHelmRun(ctx context.Context, namespace, name, h
 		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
 	}
 	return true
+}
+
+// helmRetryBackoffCap bounds how long a host whose helm runs keep failing
+// for one spec waits between them.
+const helmRetryBackoffCap = 15 * time.Minute
+
+// helmRetryBackoff is how long to wait after the failures-th consecutive
+// failure of one spec before running it again: base, doubled for each failure
+// after the first, at most helmRetryBackoffCap. Each run holds the fleet's one
+// render slot for as long as its chart fetch takes, so a tenant chart that
+// fails slowly, retried at a flat interval, would hold it most of the time.
+//
+// Fetching outside the slot would free it outright, but Helm pulls a chart
+// into memory, and the slot exists to bound memory: unbounded concurrent
+// fetches of tenant-sized charts are the stampede it prevents.
+func helmRetryBackoff(base time.Duration, failures int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	d := base
+	for i := 1; i < failures; i++ {
+		if d >= helmRetryBackoffCap/2 {
+			return helmRetryBackoffCap
+		}
+		d *= 2
+	}
+	return min(d, helmRetryBackoffCap)
+}
+
+// helmFailures reads AttributeHelmReleaseFailures.
+func helmFailures(host *kdexv1alpha1.KDexHost) int {
+	n, _ := strconv.Atoi(host.Status.Attributes[AttributeHelmReleaseFailures])
+	return n
 }
 
 // reader is APIReader, or Client when none is set.
@@ -276,7 +318,9 @@ func (r *KDexHostReconciler) registerHelmRun(key types.NamespacedName, cancel co
 
 		r.mu.Lock()
 	}
-	r.activeHelmOperations[key] = helmOperation{cancel, hash}
+	r.helmRunSeq++
+	id := r.helmRunSeq
+	r.activeHelmOperations[key] = helmOperation{cancel: cancel, hash: hash, id: id}
 	if r.helmRuns == nil {
 		r.helmRuns = make(map[types.NamespacedName]int)
 	}
@@ -285,7 +329,7 @@ func (r *KDexHostReconciler) registerHelmRun(key types.NamespacedName, cancel co
 
 	return func() {
 		r.mu.Lock()
-		if op, exists := r.activeHelmOperations[key]; exists && op.hash == hash {
+		if op, exists := r.activeHelmOperations[key]; exists && op.id == id {
 			delete(r.activeHelmOperations, key)
 		}
 		if r.helmRuns[key]--; r.helmRuns[key] <= 0 {
@@ -419,18 +463,19 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 		// Last attempt failed for this same spec. The failure may have been
 		// transient (a network policy that hadn't landed yet, a registry
 		// blip, control-plane pressure during --wait), so we retry instead
-		// of locking the release in a permanent Degraded state. A bounded
-		// backoff governed by r.RequeueDelay keeps us from hammering when
-		// the cause is chronic.
+		// of locking the release in a permanent Degraded state. A backoff
+		// from r.RequeueDelay, growing with each consecutive failure, keeps
+		// us from hammering when the cause is chronic.
 		if lastAttemptStr := latestHost.Status.Attributes[AttributeHelmReleaseLastAttempt]; lastAttemptStr != "" {
 			if lastAttempt, parseErr := time.Parse(time.RFC3339, lastAttemptStr); parseErr == nil {
 				elapsed := time.Since(lastAttempt)
-				if elapsed < r.RequeueDelay {
+				interval := helmRetryBackoff(r.RequeueDelay, helmFailures(latestHost))
+				if elapsed < interval {
 					log.V(2).Info("reconcileHelmReleases#3b",
 						"host", host.Name, "namespace", host.Namespace,
 						"msg", "in backoff after failure",
 						"elapsed", elapsed.String(),
-						"interval", r.RequeueDelay.String())
+						"interval", interval.String())
 					return controllerutil.OperationResultNone, nil
 				}
 			}
@@ -469,6 +514,13 @@ func (r *KDexHostReconciler) reconcileHelmReleases(ctx context.Context, host *kd
 	// snapshot may predate the last one: carry the server's forward (#46).
 	if _, ok := companionRecord(latestHost); ok {
 		host.Status.Attributes[AttributeCompanionReleases] = latestHost.Status.Attributes[AttributeCompanionReleases]
+	}
+	// Failures are counted per spec: a retry of this one carries the
+	// server's count forward, a run for a new one starts from none.
+	if n, ok := latestHost.Status.Attributes[AttributeHelmReleaseFailures]; ok && recordedHash == currentHash {
+		host.Status.Attributes[AttributeHelmReleaseFailures] = n
+	} else {
+		delete(host.Status.Attributes, AttributeHelmReleaseFailures)
 	}
 
 	// We need to update the status now before starting the goroutine.
@@ -532,14 +584,6 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	log.V(2).Info("runAsyncHelmReconcile#1", "namespace", namespace, "name", name)
 	key := types.NamespacedName{Namespace: namespace, Name: name}
 
-	// The cached copy is enough to get started: the host is read again, live,
-	// once a render slot is held, and that read decides whether to proceed.
-	host := &kdexv1alpha1.KDexHost{}
-	if err := r.Get(ctx, key, host); err != nil {
-		log.Error(err, "failed to get host", "namespace", namespace, "name", name)
-		return // Host might have been deleted
-	}
-
 	if r.HelmClientFactory == nil {
 		err := fmt.Errorf("HelmClientFactory is nil")
 		log.Error(err, "controller misconfigured")
@@ -558,26 +602,22 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	}
 	defer release()
 
-	// Re-read the host now that the slot is held. The wait above can last
-	// minutes on a serialized fleet, and the snapshot taken before it says
-	// nothing about what is still true: the host may have been deleted and
-	// fully finalized in the meantime. Proceeding on the stale copy would
-	// re-create the Helm client that deletion just removed and re-install the
-	// release plus every companion the stale spec declares -- releases that
-	// then run with no CR left in the cluster referencing them, invisible to
-	// the prune because the stale spec still declares them. Read live: a
-	// cached copy can predate the deletion it exists to notice.
-	if err := r.reader().Get(ctx, key, host); err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to re-read host after acquiring a render slot", "namespace", namespace, "name", name)
-		}
-		log.V(2).Info("host is gone; abandoning queued helm render", "namespace", namespace, "name", name)
+	// Read the host only now that the slot is held. The wait above can last
+	// minutes on a serialized fleet, and nothing read before it says what is
+	// still true: the host may have been deleted and fully finalized in the
+	// meantime. Proceeding on a stale copy would re-create the Helm client
+	// that deletion just removed and re-install the release plus every
+	// companion the stale spec declares -- releases that then run with no CR
+	// left in the cluster referencing them, invisible to the prune because the
+	// stale spec still declares them. Read live: a cached copy can predate the
+	// deletion it exists to notice.
+	host, err := r.helmRunWanted(ctx, key)
+	if r.haltHelmRun(ctx, namespace, name, hash, err, log) {
 		return
 	}
-	if !host.DeletionTimestamp.IsZero() {
-		log.V(2).Info("host is terminating; abandoning queued helm render", "namespace", namespace, "name", name)
-		return
-	}
+	// Asked once each chart is in hand, before Helm acts on it: a fetch can
+	// outlast teardown's wait for this run.
+	proceed := func() error { return r.stillWanted(ctx, key) }
 
 	c, err := r.getOrCreateHelmClient(
 		host.Name,
@@ -591,8 +631,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	}
 
 	// 1. Reconcile kdex-host-manager chart
-	if err := r.reconcileHostManagerChart(c, host); err != nil {
-		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+	if r.haltHelmRun(ctx, namespace, name, hash, r.reconcileHostManagerChart(c, host, proceed), log) {
 		return
 	}
 
@@ -621,11 +660,10 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 			// Teardown waits for this goroutine, so once the host is
 			// terminating install nothing more: anything installed now only
 			// delays the teardown that has to remove it.
-			if r.haltHelmRun(ctx, namespace, name, hash, r.helmRunWanted(ctx, key), log) {
+			if r.haltHelmRun(ctx, namespace, name, hash, r.stillWanted(ctx, key), log) {
 				return
 			}
-			if err := r.reconcileCompanionChart(c, host, companion); err != nil {
-				r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+			if r.haltHelmRun(ctx, namespace, name, hash, r.reconcileCompanionChart(c, host, companion, proceed), log) {
 				return
 			}
 		}
@@ -633,10 +671,10 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 
 	// Every chart load is done, so give the render slot back before the prune.
 	// The prune loads no chart -- it lists releases and uninstalls -- but each
-	// uninstall waits on foreground deletion for up to 5 minutes. Holding a
-	// MEMORY bound across that would let one companion blocked by a finalizer
-	// stall every other host's render, which is the whole failure this slot is
-	// supposed to prevent rather than cause.
+	// uninstall waits on foreground deletion for up to utils.HelmCallTimeout.
+	// Holding a MEMORY bound across that would let one companion blocked by a
+	// finalizer stall every other host's render, which is the whole failure
+	// this slot is supposed to prevent rather than cause.
 	release()
 
 	// 3. Prune companions we own that are no longer declared. Deliberately
@@ -653,10 +691,10 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	// seen terminating: teardown uninstalls every recorded release anyway,
 	// and waits for this goroutine to do it. What a stopped prune removed
 	// stays recorded, harmlessly: with no release, nothing carries its label.
-	if r.haltHelmRun(ctx, namespace, name, hash, r.helmRunWanted(ctx, key), log) {
+	if r.haltHelmRun(ctx, namespace, name, hash, r.stillWanted(ctx, key), log) {
 		return
 	}
-	pruned, labelled, err := r.pruneCompanionCharts(c, host, hostReleases, func() error { return r.helmRunWanted(ctx, key) }, log)
+	pruned, labelled, err := r.pruneCompanionCharts(c, host, hostReleases, proceed, log)
 	if errors.Is(err, errHostTerminating) || ctx.Err() != nil {
 		r.haltHelmRun(ctx, namespace, name, hash, err, log)
 		return
@@ -783,9 +821,10 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 	if err != nil {
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusFailed
 		host.Status.Attributes[AttributeHelmReleaseError] = err.Error()
-		// Timestamp the failure so the next reconcile can compute backoff
-		// and decide whether to retry (see reconcileHelmReleases#3b/#3c).
+		// Timestamp and count the failure so the next reconcile can compute
+		// backoff and decide whether to retry (see reconcileHelmReleases#3b/#3c).
 		host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
+		host.Status.Attributes[AttributeHelmReleaseFailures] = strconv.Itoa(helmFailures(host) + 1)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
@@ -799,6 +838,7 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 		host.Status.Attributes[AttributeHelmReleaseStatus] = HelmStatusCompleted
 		delete(host.Status.Attributes, AttributeHelmReleaseError)
 		delete(host.Status.Attributes, AttributeHelmReleaseLastAttempt)
+		delete(host.Status.Attributes, AttributeHelmReleaseFailures)
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
@@ -812,11 +852,14 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 	host.Status.Attributes[AttributeHelmReleaseOwner] = controllerID
 }
 
-func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost) error {
+// reconcileHostManagerChart installs or upgrades the host's own release,
+// asking proceed once its chart is in hand.
+func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, proceed func() error) error {
 	spec, err := r.buildHostManagerChartSpec(host)
 	if err != nil {
 		return err
 	}
+	spec.Proceed = proceed
 
 	return helmClient.InstallOrUpgrade(spec)
 }
@@ -916,7 +959,9 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 	}, nil
 }
 
-func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, companion kdexv1alpha1.CompanionChart) error {
+// reconcileCompanionChart installs or upgrades one companion release, asking
+// proceed once its chart is in hand.
+func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, companion kdexv1alpha1.CompanionChart, proceed func() error) error {
 	if companion.Repository != "" {
 		if err := helmClient.AddRepository(companion.Name, companion.Repository); err != nil {
 			return err
@@ -936,6 +981,7 @@ func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClient
 		Version:     companion.Version,
 		UpgradeCRDs: false,
 		Labels:      companionLabels(host.Name),
+		Proceed:     proceed,
 	}
 
 	return helmClient.InstallOrUpgrade(spec)

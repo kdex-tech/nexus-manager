@@ -19,15 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
-// withTeardownIndexes registers the indexes a host's teardown lists its
-// internal pages and translations by, as SetupWithManager does. b must
-// already have its scheme.
-func withTeardownIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
-	return b.
-		WithIndex(&kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, indexInternalUtilityPageByHost).
-		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, indexInternalTranslationByHost)
-}
-
 // stuckUninstallHelmClient models a release whose teardown cannot complete --
 // e.g. a PVC held by a terminating pod, which makes Helm's foreground deletion
 // time out.

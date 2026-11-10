@@ -58,7 +58,9 @@ func TestHelmClient_SecretWithPlainHTTP(t *testing.T) {
 				"/{path...}",
 				func(w http.ResponseWriter, r *http.Request) {
 					calledPlainHTTP = true
-					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+					// Not a 5xx: the registry transport retries those, with
+					// backoff, which only slows the test down.
+					http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 				},
 			)
 		},

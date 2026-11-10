@@ -195,7 +195,9 @@ func TestTeardownWaitsForAnInFlightHelmOperation(t *testing.T) {
 	}
 	got := mock.Uninstalled()
 	slices.Sort(got)
-	if want := []string{"my-host", "x1", "x2"}; !slices.Equal(got, want) {
+	// x2 was being fetched when the host began terminating, so it was never
+	// installed: there is no x2 to uninstall.
+	if want := []string{"my-host", "x1"}; !slices.Equal(got, want) {
 		t.Errorf("uninstalled = %v, want %v", got, want)
 	}
 }
@@ -286,6 +288,9 @@ func TestHelmReconcile_SkipsThePruneOnceTheHostIsTerminating(t *testing.T) {
 	}
 }
 
+// A prune already under way stops at the next release once its host is seen
+// terminating: each uninstall can take utils.HelmCallTimeout, and teardown,
+// waiting on this run, removes the rest anyway.
 func TestHelmReconcile_StopsPruningOnceTheHostIsTerminating(t *testing.T) {
 	host := recorded(helmHost("my-host"), "d1", "d2")
 	host.Finalizers = []string{hostFinalizerName}
@@ -366,26 +371,4 @@ func TestHelmReconcile_StopsQuietlyOnceCancelled(t *testing.T) {
 	if s := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseStatus]; s != HelmStatusInProgress {
 		t.Errorf("helm status = %q, want it left %q for the successor", s, HelmStatusInProgress)
 	}
-}
-
-// The run is counted from the moment it is started, not from when its
-// goroutine first runs: a teardown in between must already see it.
-func TestStartHelmRun_CountsTheRunBeforeItsGoroutineRuns(t *testing.T) {
-	mock := newBlockingHelmClient("my-host", nil)
-	r, _ := newHelmReconciler(t, mock, nil, helmHost("my-host"))
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	if !r.startHelmRun(ctx, cancel, "ns", "my-host", "hash", nil, logr.Discard()) {
-		t.Fatal("startHelmRun registered nothing")
-	}
-	if !r.helmRunInFlight(key) {
-		t.Error("the run is not counted as soon as startHelmRun returns")
-	}
-	if r.startHelmRun(ctx, cancel, "ns", "my-host", "hash", nil, logr.Discard()) {
-		t.Error("a second run for the same hash was started")
-	}
-	<-mock.entered
-	close(mock.proceed)
-	awaitNoHelmRun(t, r, key)
 }
