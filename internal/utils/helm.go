@@ -621,8 +621,9 @@ func (h *HelmClient) install(spec *ChartSpec) error {
 
 	// Locate the chart. LocateChart re-downloads the archive on every call,
 	// and the chart is identical across hosts, so an exact version's located
-	// path is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
-	// chart while rendering, so each render needs its own copy.
+	// path is cached and shared fleet-wide (see locateChart). loader.Load
+	// still runs per render: Helm mutates the chart while rendering, so each
+	// render needs its own copy.
 	cp, err := h.locateChart(spec, func() (string, error) {
 		return client.LocateChart(spec.ChartName, h.settings)
 	})
@@ -687,8 +688,9 @@ func (h *HelmClient) upgrade(spec *ChartSpec) error {
 
 	// Locate the chart. LocateChart re-downloads the archive on every call,
 	// and the chart is identical across hosts, so an exact version's located
-	// path is cached and shared fleet-wide (see locateChart). loader.Load still runs per render: Helm mutates the
-	// chart while rendering, so each render needs its own copy.
+	// path is cached and shared fleet-wide (see locateChart). loader.Load
+	// still runs per render: Helm mutates the chart while rendering, so each
+	// render needs its own copy.
 	cp, err := h.locateChart(spec, func() (string, error) {
 		return client.LocateChart(spec.ChartName, h.settings)
 	})
