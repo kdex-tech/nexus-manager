@@ -1,34 +1,12 @@
 package utils
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"slices"
 
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 )
-
-type Stringer interface {
-	String() string
-}
-
-func Hash[T any](s T) string {
-	var buf bytes.Buffer
-	switch v := any(s).(type) {
-	case string:
-		buf.WriteString(v)
-	case []byte:
-		buf.Write(v)
-	case Stringer:
-		buf.WriteString(v.String())
-	default:
-		fmt.Fprintf(&buf, "%v", v)
-	}
-	hash := sha256.Sum256(buf.Bytes())
-	return hex.EncodeToString(hash[:])
-}
 
 func IfElse[T any](predicate bool, trueVal T, elseVal T) T {
 	if predicate {
@@ -48,10 +26,9 @@ func MapSlice[T any, U any](slice []T, mapper func(T) U) []U {
 // HashSecrets identifies a set of Secrets by version: each one's
 // namespace/name@resourceVersion, sorted, so two reads of the same Secrets
 // agree and an update to any of them -- which bumps its resourceVersion --
-// does not. Hash, formatting the Secrets with %v, prints their pointer fields
-// (an owner reference's Controller and BlockOwnerDeletion, Immutable) as heap
-// addresses, which differ on every read of a fresh copy. Nor are a Secret's
-// contents hashed: the result is recorded in status.
+// does not. Nothing a fresh copy changes, such as the addresses behind its
+// pointer fields, takes part. Nor are a Secret's contents hashed: the result
+// is recorded in status.
 func HashSecrets(secrets kdexv1alpha1.Secrets) string {
 	ids := make([]string, 0, len(secrets))
 	for _, s := range secrets {

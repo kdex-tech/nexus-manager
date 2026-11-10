@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/go-logr/logr"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/loader"
@@ -286,7 +287,14 @@ func (h *HelmClient) ListReleases(matchLabels map[string]string) ([]string, erro
 // so the same artifact is not re-downloaded once per host. The key includes a
 // hash of this client's resolved secrets so a cached archive is never reused
 // across a credential boundary.
+//
+// Only a chart named by an exact version is cached. An empty version, a range
+// or any other tag names whatever the repository resolves it to now, which may
+// be a new chart tomorrow: cached, it would resolve once per process (#50).
 func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (string, error) {
+	if _, err := semver.StrictNewVersion(spec.Version); err != nil {
+		return load()
+	}
 	key := chartPathKey(spec.ChartName, spec.Version, HashSecrets(h.secrets))
 	return sharedChartPaths.get(key, load)
 }
@@ -456,8 +464,10 @@ func registryTransport(debug, insecure bool) http.RoundTripper {
 	}
 	t, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		// Only if something replaced http.DefaultTransport; the stdlib's
-		// zero transport is still a working one.
+		// Only if something replaced http.DefaultTransport. The zero
+		// transport works, but sets no dial, TLS-handshake or idle timeout of
+		// its own: only the client's per-request timeout and the fetch's
+		// deadline bound it.
 		t = &http.Transport{}
 	}
 	t = t.Clone()
@@ -476,9 +486,8 @@ var errFetchBudget = errors.New("registry fetch budget exhausted")
 // fetchBudget refuses every request once the fetch it belongs to has made
 // maxRequests of them, cuts off any request at the fetch's deadline, and fails
 // any read past maxBytes across all of the fetch's responses. One is made per
-// registry client, and
-// registryBind makes a client per chart operation, so the budget is one
-// operation's.
+// registry client, and registryBind makes a client per chart operation, so the
+// budget is one operation's.
 type fetchBudget struct {
 	next     http.RoundTripper
 	deadline time.Time
@@ -523,7 +532,9 @@ type budgetedBody struct {
 func (b *budgetedBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if limit := b.budget.limits.maxBytes; b.budget.read.Add(int64(n)) > limit {
-		return n, fmt.Errorf("%w: more than %d bytes", errFetchBudget, limit)
+		return n, fmt.Errorf("%w: more than %d bytes read from the registry; a chart that needs more is let through "+
+			"by raising the manager's --registry-fetch-max-bytes (chart value "+
+			"controllerManager.container.registryFetchMaxBytes), and its memory limit with it", errFetchBudget, limit)
 	}
 	return n, err
 }

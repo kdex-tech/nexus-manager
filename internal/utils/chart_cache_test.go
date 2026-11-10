@@ -117,3 +117,41 @@ func TestChartPathCache_EvictsBeyondCapacity(t *testing.T) {
 		t.Errorf("cache holds %d entries, want <= 2", got)
 	}
 }
+
+// Only a chart named by an exact version is the same chart every time. An
+// empty version, a range or any other tag may resolve to a new chart tomorrow:
+// cached, it would resolve once per process (kdex-tech/nexus-manager#50).
+func TestLocateChart_CachesOnlyExactVersions(t *testing.T) {
+	// The cache is the process's: start from an empty one, whatever ran before.
+	shared := sharedChartPaths
+	sharedChartPaths = newChartPathCache(defaultChartPathCacheSize)
+	defer func() { sharedChartPaths = shared }()
+
+	for _, tc := range []struct {
+		version string
+		cached  bool
+	}{
+		{"1.2.3", true},
+		{"1.2.3-rc.1", true},
+		{"", false},
+		{"^1.2", false},
+		{"latest", false},
+		{"v1.2.3", false},
+	} {
+		h := &HelmClient{}
+		loads := 0
+		load := func() (string, error) {
+			loads++
+			return "/charts/c-" + tc.version + ".tgz", nil
+		}
+		spec := &ChartSpec{ChartName: "oci://example.test/charts/cache-test-" + tc.version, Version: tc.version}
+		for range 2 {
+			if _, err := h.locateChart(spec, load); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if want := map[bool]int{true: 1, false: 2}[tc.cached]; loads != want {
+			t.Errorf("version %q: located %d times in two renders, want %d", tc.version, loads, want)
+		}
+	}
+}

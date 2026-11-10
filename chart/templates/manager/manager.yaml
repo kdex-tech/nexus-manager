@@ -40,6 +40,9 @@ spec:
             - --helm-render-concurrency={{ .Values.controllerManager.container.helmRenderConcurrency }}
             {{- end }}
             {{- if not (kindIs "invalid" .Values.controllerManager.container.registryFetchMaxBytes) }}
+            {{- /* int64: YAML numbers reach the template as float64, which
+                   prints a large value like 16777216 as 1.6777216e+07 --
+                   not something the flag parses. */}}
             - --registry-fetch-max-bytes={{ int64 .Values.controllerManager.container.registryFetchMaxBytes }}
             {{- end }}
             {{- if not (kindIs "invalid" .Values.controllerManager.container.memoryLimitRatio) }}

@@ -455,9 +455,9 @@ func TestTeardown_ReadsTheClusterHostIntoAFreshObject(t *testing.T) {
 
 // The helm operation owns the helm.release. attributes. A reconcile's status
 // patch takes them as last read, so it never writes one: a key the operation
-// deleted --
-// a success clears last-attempt and attempts -- is not restored from the
-// reconcile's own copy, which may have set it when the operation started.
+// deleted -- a success clears last-attempt and attempts -- is not restored
+// from the reconcile's own copy, which may have set it when the operation
+// started.
 func TestTakeHelmAttributes(t *testing.T) {
 	snapshot := map[string]string{
 		AttributeHelmReleaseLastAttempt: "when the run started",

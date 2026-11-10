@@ -893,6 +893,13 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 	return op, internalHost, nil
 }
 
+// helmClientKey names a host's cached Helm client. A name cannot contain "/",
+// so no two hosts share a key; joined by "-", host "a-b" in "c" and host "a"
+// in "b-c" did, and one got a client bound to the other's namespace.
+func helmClientKey(name, namespace string) string {
+	return namespace + "/" + name
+}
+
 func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -901,7 +908,7 @@ func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) err
 		r.helmClients = map[string]cachedHelmClient{}
 	}
 
-	delete(r.helmClients, name+"-"+namespace)
+	delete(r.helmClients, helmClientKey(name, namespace))
 
 	return nil
 }
@@ -914,7 +921,7 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 		r.helmClients = map[string]cachedHelmClient{}
 	}
 
-	key := name + "-" + namespace
+	key := helmClientKey(name, namespace)
 	hash := utils.HashSecrets(secrets)
 
 	cached, ok := r.helmClients[key]

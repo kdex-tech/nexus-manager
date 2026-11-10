@@ -87,3 +87,28 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 		t.Fatalf("expected a fresh client after credential rotation, got the stale cached one")
 	}
 }
+
+// A Helm client is bound to its host's namespace and release storage. Host
+// "a-b" in namespace "c" and host "a" in namespace "b-c" are different hosts,
+// whatever their names look like joined up.
+func TestGetOrCreateHelmClientKeepsHostsInDifferentNamespacesApart(t *testing.T) {
+	var namespaces []string
+	r := &KDexHostReconciler{
+		HelmClientFactory: func(namespace string, _ kdexv1alpha1.Secrets, _ logr.Logger) (utils.HelmClientInterface, error) {
+			namespaces = append(namespaces, namespace)
+			return &stubHelmClient{id: len(namespaces)}, nil
+		},
+	}
+
+	first, err := r.getOrCreateHelmClient("a-b", "c", nil, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.getOrCreateHelmClient("a", "b-c", nil, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("host a in b-c got host a-b's client, bound to namespace %v", namespaces)
+	}
+}

@@ -102,8 +102,12 @@ controllerManager:
     # chart's registry is tenant input, and Helm holds what it reads in memory
     # -- tag listings at about nine times their size -- so this bounds what a
     # registry can make the operator allocate. Raise it only together with
-    # resources.limits.memory below. Left null for the same
-    # single-source-of-truth reason as above. Binary default: 4194304 (4MiB).
+    # resources.limits.memory below.
+    #
+    # A positive integer number of bytes. 0 does NOT disable it: the manager
+    # refuses to start on 0 or less, as it does on any value that would bound
+    # nothing. Left null for the same single-source-of-truth reason as above.
+    # Binary default: 4194304 (4MiB).
     registryFetchMaxBytes: null
     # Fraction of the container's cgroup memory limit installed as Go's soft
     # memory limit (GOMEMLIMIT), so the GC applies backpressure before the

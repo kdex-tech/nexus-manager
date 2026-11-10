@@ -252,42 +252,8 @@ func TestRegistryClient_SendsTheSecretsCredentials(t *testing.T) {
 	}
 }
 
-// bigTags serves tag pages of pageBytes each, endlessly.
-func bigTags(pageBytes int, served *atomic.Int64) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := served.Add(1)
-		var tags []string
-		for size := 0; size < pageBytes; size += 16 {
-			tags = append(tags, fmt.Sprintf(`"%d.%d.0"`, n, size))
-		}
-		w.Header().Set("Link", fmt.Sprintf(`<%s?n=1&last=%d>; rel="next"`, r.URL.Path, n))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"name":"charts/tarpit","tags":[%s]}`, strings.Join(tags, ","))
-	})
-}
-
-// Time and request count do not bound memory. A version range keeps every
-// semver tag of every page in the heap, several times its size on the wire,
-// and a blob is pulled into memory whatever size it declares: a tenant's
-// registry could grow the operator past its memory limit within its budget.
-// The fetch's bytes are bounded too, tag listings tightly.
-func TestRegistryClient_BoundsTheBytesATagListingReads(t *testing.T) {
-	var served atomic.Int64
-	srv := httptest.NewServer(bigTags(256<<10, &served))
-	defer srv.Close()
-	host := strings.TrimPrefix(srv.URL, "http://")
-	limits := testLimits(time.Minute, time.Minute, 1_000_000)
-	limits.maxBytes = 1 << 20
-
-	err := tagsWithin(t, host+"/charts/tarpit", helmSecret(host, map[string]string{"plainHTTP": "true"}), limits, 20*time.Second)
-	if !errors.Is(err, errFetchBudget) {
-		t.Fatalf("an endless listing of large pages = %v, want the fetch budget exhausted", err)
-	}
-	if n := served.Load(); n > 6 {
-		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", n)
-	}
-}
-
+// A blob is pulled into memory whatever size it declares, so any one response
+// is bounded too, and the error says what lets a bigger chart through.
 func TestFetchBudget_BoundsTheBytesOfAnyResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		chunk := make([]byte, 64<<10)
@@ -308,6 +274,12 @@ func TestFetchBudget_BoundsTheBytesOfAnyResponse(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	n, err := io.Copy(io.Discard, resp.Body)
+	// A chart past the limit is one the operator must be told how to let
+	// through.
+	if err == nil || !strings.Contains(err.Error(), "--registry-fetch-max-bytes") ||
+		!strings.Contains(err.Error(), "registryFetchMaxBytes") {
+		t.Errorf("the budget's error = %v, want it to name the flag and the chart value that raise it", err)
+	}
 	if !errors.Is(err, errFetchBudget) {
 		t.Errorf("reading a 64MiB response within a 1MiB budget = %v, want the fetch budget exhausted", err)
 	}
@@ -339,7 +311,9 @@ func TestRegistryTransport_InsecureGoesDirect(t *testing.T) {
 	}
 }
 
-// tagPage writes one page of tags, of about pageBytes, linking to next.
+// tagPage writes one page of tags linking to next: one tag for each 16 bytes
+// of pageBytes, each tag shorter than that, so the page comes to somewhat
+// under pageBytes.
 func tagPage(w http.ResponseWriter, n int64, pageBytes int, next string) {
 	var tags []string
 	for size := 0; size < pageBytes; size += 16 {
@@ -348,6 +322,16 @@ func tagPage(w http.ResponseWriter, n int64, pageBytes int, next string) {
 	w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = fmt.Fprintf(w, `{"name":"charts/tarpit","tags":[%s]}`, strings.Join(tags, ","))
+}
+
+// endlessLinks serves 256KiB tag pages without end, each linking to next(n).
+func endlessLinks(next func(n int64) string) func(served *atomic.Int64) http.Handler {
+	return func(served *atomic.Int64) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := served.Add(1)
+			tagPage(w, n, 256<<10, next(n))
+		})
+	}
 }
 
 // listTarpit lists a tag listing served by h against a 1MiB byte budget,
@@ -364,58 +348,48 @@ func listTarpit(t *testing.T, h func(served *atomic.Int64) http.Handler) (error,
 	return err, served.Load()
 }
 
-// The registry writes the Link a listing follows: a page linking off the
-// tag list's path is still a page of tags.
-func TestRegistryClient_TagListingBudgetFollowsLinksAnywhere(t *testing.T) {
-	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			n := served.Add(1)
-			tagPage(w, n, 256<<10, fmt.Sprintf("/elsewhere/page?n=%d", n))
-		})
-	})
-	if !errors.Is(err, errFetchBudget) {
-		t.Fatalf("a listing linked off the tag list's path = %v, want the fetch budget exhausted", err)
-	}
-	if pages > 6 {
-		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
-	}
-}
-
-// Nor does a redirect off the tag list's path make its pages something else.
-func TestRegistryClient_TagListingBudgetFollowsRedirects(t *testing.T) {
-	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/tags/list") {
-				http.Redirect(w, r, "/storage/page?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
-				return
+// Time and request count do not bound memory. To resolve a version range
+// Helm keeps every semver tag of every page in the heap, several times its
+// size on the wire, so a registry handing out page after page could grow the
+// operator past its memory limit well within its time and request budgets.
+// The fetch's bytes are bounded too, by one budget across every response:
+// the registry writes every URL the client follows -- each page's Link, each
+// redirect -- so whatever the next page's URL looks like, even a blob's, a
+// page of tags is still a page of tags.
+func TestRegistryClient_BoundsTheBytesOfATagListing(t *testing.T) {
+	for _, tc := range []struct {
+		next    string
+		handler func(served *atomic.Int64) http.Handler
+	}{
+		{"the tag list's own path", endlessLinks(func(n int64) string {
+			return fmt.Sprintf("/v2/charts/tarpit/tags/list?n=1&last=%d", n)
+		})},
+		{"another path", endlessLinks(func(n int64) string {
+			return fmt.Sprintf("/elsewhere/page?n=%d", n)
+		})},
+		{"a blob's path", endlessLinks(func(n int64) string {
+			return fmt.Sprintf("/v2/charts/tarpit/blobs/sha256:%064d?p=%d", n, n)
+		})},
+		{"a redirect off the tag list's path", func(served *atomic.Int64) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/tags/list") {
+					http.Redirect(w, r, "/storage/page?"+r.URL.RawQuery, http.StatusTemporaryRedirect)
+					return
+				}
+				n := served.Add(1)
+				tagPage(w, n, 256<<10, fmt.Sprintf("/v2/charts/tarpit/tags/list?n=1&last=%d", n))
+			})
+		}},
+	} {
+		t.Run(tc.next, func(t *testing.T) {
+			err, pages := listTarpit(t, tc.handler)
+			if !errors.Is(err, errFetchBudget) {
+				t.Fatalf("an endless listing whose next page is at %s = %v, want the fetch budget exhausted", tc.next, err)
 			}
-			n := served.Add(1)
-			tagPage(w, n, 256<<10, fmt.Sprintf("/v2/charts/tarpit/tags/list?n=1&last=%d", n))
+			if pages > 6 {
+				t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
+			}
 		})
-	})
-	if !errors.Is(err, errFetchBudget) {
-		t.Fatalf("a listing redirected off the tag list's path = %v, want the fetch budget exhausted", err)
-	}
-	if pages > 6 {
-		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
-	}
-}
-
-// The registry writes every URL the client follows, so no path tells a blob
-// from a tag page: a listing whose Link names a blob is still a listing, and
-// the one byte budget bounds it.
-func TestRegistryClient_TagListingLinkedToABlobPathIsBounded(t *testing.T) {
-	err, pages := listTarpit(t, func(served *atomic.Int64) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			n := served.Add(1)
-			tagPage(w, n, 256<<10, fmt.Sprintf("/v2/charts/tarpit/blobs/sha256:%064d?p=%d", n, n))
-		})
-	})
-	if !errors.Is(err, errFetchBudget) {
-		t.Fatalf("a listing linked to a blob path = %v, want the fetch budget exhausted", err)
-	}
-	if pages > 6 {
-		t.Errorf("read %d pages of 256KiB within a 1MiB budget, want it stopped by the sixth", pages)
 	}
 }
 
