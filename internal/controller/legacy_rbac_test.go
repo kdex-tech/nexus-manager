@@ -7,12 +7,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -147,7 +149,7 @@ func TestCleanupLegacy_WaitsForNewRoleBinding(t *testing.T) {
 	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
 	createObjects(t, fc, role, binding)
 
-	if err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertExists(t, fc, role)
@@ -180,7 +182,7 @@ func TestCleanupLegacy_DeletesAfterUpgrade(t *testing.T) {
 	ctx := context.Background()
 
 	// Before the upgrade the condition is raised ...
-	if err := r.cleanupLegacyRBAC(ctx, host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(ctx, host); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	if !meta.IsStatusConditionTrue(host.Status.Conditions, "LegacyRBACPresent") {
@@ -189,7 +191,7 @@ func TestCleanupLegacy_DeletesAfterUpgrade(t *testing.T) {
 
 	// ... and the rolled-out upgrade lets the cleanup go ahead.
 	upgraded(t, fc, "my-host", "ns")
-	if err := r.cleanupLegacyRBAC(ctx, host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(ctx, host); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertDeleted(t, fc, legacyClusterRole("my-host", "ns"))
@@ -218,7 +220,7 @@ func TestCleanupLegacy_SameNameOtherNamespaceUntouched(t *testing.T) {
 	createObjects(t, fc, role, binding)
 	upgraded(t, fc, "rsi", "a")
 
-	if err := r.cleanupLegacyRBAC(context.Background(), hostA); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), hostA); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertExists(t, fc, role)
@@ -372,7 +374,7 @@ func TestCleanupLegacy_ProofReadFailureKeepsLegacy(t *testing.T) {
 	createObjects(t, fc, role, binding)
 	upgraded(t, fc, "my-host", "ns")
 
-	if err := r.cleanupLegacyRBAC(context.Background(), host); err == nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err == nil {
 		t.Error("cleanupLegacyRBAC succeeded without its proof")
 	}
 	assertExists(t, fc, role)
@@ -422,7 +424,7 @@ func TestCleanupLegacy_WaitsForRollout(t *testing.T) {
 				createObjects(t, fc, tc.deploy())
 			}
 
-			if err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+			if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
 				t.Fatalf("cleanupLegacyRBAC: %v", err)
 			}
 			assertExists(t, fc, role)
@@ -446,7 +448,7 @@ func TestCleanupLegacy_BindingToASharedRole(t *testing.T) {
 	createObjects(t, fc, shared, binding)
 	upgraded(t, fc, "my-host", "ns")
 
-	if err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertDeleted(t, fc, binding)
@@ -722,3 +724,125 @@ var _ = Describe("Legacy RBAC cleanup against the API server", func() {
 		}).Should(BeTrue())
 	})
 })
+
+// newSettledHost is a host whose reconcile settles -- release healthy and
+// unchanged, host-manager's Deployment Available -- so any requeue its
+// Reconcile returns is the legacy cleanup's. deploy is that Deployment.
+func newSettledHost(t *testing.T, funcs *interceptor.Funcs, deploy *appsv1.Deployment) (*KDexHostReconciler, client.Client, types.NamespacedName) {
+	t.Helper()
+	host := hostWithRecordedSA("my-host", HelmStatusCompleted)
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), funcs, host)
+	r.RequeueDelay = 7 * time.Second
+	reconcilable(t, fc)
+	stored := getHost(t, fc, "my-host")
+	hash, err := r.computeHelmReleaseHash(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Status.Attributes[AttributeHelmReleaseHash] = hash
+	if err := fc.Status().Update(t.Context(), stored); err != nil {
+		t.Fatal(err)
+	}
+	// Available stays True through a rolling update.
+	deploy.Status.Conditions = []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue}}
+	createObjects(t, fc, chartRoleBinding("my-host", "ns"), deploy)
+	return r, fc, types.NamespacedName{Namespace: "ns", Name: "my-host"}
+}
+
+// rollingDeployment is host-manager's Deployment mid-rollout: Available, its
+// new spec not yet observed.
+func rollingDeployment() *appsv1.Deployment {
+	d := rolledOutDeployment("my-host", "ns")
+	d.Status.ObservedGeneration = 1
+	return d
+}
+
+// Nothing watches the Deployment, and Available stays True through the
+// rollout, so no event follows its end: the wait requeues itself, or the
+// legacy grant outlives the rollout until something unrelated wakes the host.
+func TestCleanupLegacy_RequeuesWhileWaitingForRollout(t *testing.T) {
+	r, fc, key := newSettledHost(t, nil, rollingDeployment())
+	createObjects(t, fc, legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns"))
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != r.RequeueDelay {
+		t.Errorf("RequeueAfter = %v, want %v while the cleanup waits", res.RequeueAfter, r.RequeueDelay)
+	}
+
+	// The rollout ends, with no event: the requeued pass cleans up and stops
+	// requeueing.
+	d := &appsv1.Deployment{}
+	if err := fc.Get(t.Context(), key, d); err != nil {
+		t.Fatal(err)
+	}
+	d.Status.ObservedGeneration = d.Generation
+	if err := fc.Status().Update(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	res, err = r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	assertDeleted(t, fc, legacyClusterRole("my-host", "ns"))
+	assertDeleted(t, fc, legacyClusterRoleBinding("my-host", "ns"))
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v after the cleanup, want none", res.RequeueAfter)
+	}
+}
+
+func TestCleanupLegacy_NoRequeueWithoutLegacy(t *testing.T) {
+	r, _, key := newSettledHost(t, nil, rollingDeployment())
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v with no legacy RBAC, want none", res.RequeueAfter)
+	}
+}
+
+// A legacy read that failed leaves the RBAC possibly there: look again.
+func TestCleanupLegacy_RequeuesAfterAFailedRead(t *testing.T) {
+	funcs := &interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*rbacv1.ClusterRole); ok {
+				return apierrors.NewForbidden(schema.GroupResource{Group: rbacv1.GroupName, Resource: "clusterroles"}, key.Name, nil)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+	r, _, key := newSettledHost(t, funcs, rolledOutDeployment("my-host", "ns"))
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != r.RequeueDelay {
+		t.Errorf("RequeueAfter = %v, want %v after a failed legacy read", res.RequeueAfter, r.RequeueDelay)
+	}
+}
+
+// The cleanup's requeue joins whatever the rest of Reconcile returns: the
+// sooner non-zero requeue wins, and an error is never traded for a requeue.
+func TestRequeueForLegacyRBAC(t *testing.T) {
+	boom := errors.New("boom")
+	for _, tc := range []struct {
+		name string
+		res  ctrl.Result
+		err  error
+		want ctrl.Result
+	}{
+		{"no requeue", ctrl.Result{}, nil, ctrl.Result{RequeueAfter: 7 * time.Second}},
+		{"a later requeue", ctrl.Result{RequeueAfter: time.Minute}, nil, ctrl.Result{RequeueAfter: 7 * time.Second}},
+		{"a sooner requeue", ctrl.Result{RequeueAfter: time.Second}, nil, ctrl.Result{RequeueAfter: time.Second}},
+		{"an error", ctrl.Result{}, boom, ctrl.Result{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := requeueForLegacyRBAC(tc.res, tc.err, 7*time.Second); got != tc.want {
+				t.Errorf("requeueForLegacyRBAC = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

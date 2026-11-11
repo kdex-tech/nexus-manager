@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
 	appsv1 "k8s.io/api/apps/v1"
@@ -13,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -258,16 +260,22 @@ func setLegacyRBACCondition(host *kdexv1alpha1.KDexHost, status metav1.Condition
 // non-deleting pass, outside the release-hash gate: a release already
 // upgraded starts no helm run.
 //
+// pending reports that legacy RBAC may remain after this pass -- found and
+// not yet deleted, or not readable -- so the caller looks again
+// (requeueForLegacyRBAC): nothing watches host-manager's Deployment, and
+// Available stays True through its rollout, so no event follows the moment
+// the proof is met.
+//
 // Migration code: delete in release B (see the follow-up issue filed in Task N9).
-func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
+func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost) (pending bool, err error) {
 	role, binding, err := r.legacyRBAC(ctx, host)
 	if err != nil {
 		setLegacyRBACCondition(host, metav1.ConditionUnknown, reasonLegacyRBACReadFailed, err.Error())
-		return err
+		return true, err
 	}
 	if role == nil && binding == nil {
 		meta.RemoveStatusCondition(&host.Status.Conditions, ConditionLegacyRBACPresent)
-		return nil
+		return false, nil
 	}
 	names := legacyRBACNames(role, binding)
 
@@ -275,22 +283,38 @@ func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1
 	if err != nil {
 		setLegacyRBACCondition(host, metav1.ConditionTrue, reasonLegacyRBACProofReadFailed,
 			fmt.Sprintf("legacy %s remain: %v", names, err))
-		return err
+		return true, err
 	}
 	if !upgraded {
 		setLegacyRBACCondition(host, metav1.ConditionTrue, reasonLegacyRBACAwaitingUpgrade,
 			fmt.Sprintf("legacy %s remain; they are deleted once the host-manager chart's RoleBinding/%s exists in %s and Deployment/%s has rolled out",
 				names, host.Name, host.Namespace, host.Name))
-		return nil
+		return true, nil
 	}
 
 	if err := r.deleteLegacyRBAC(ctx, role, binding); err != nil {
 		setLegacyRBACCondition(host, metav1.ConditionTrue, reasonLegacyRBACCleanupFailed,
 			fmt.Sprintf("legacy %s remain: %v", names, err))
-		return err
+		return true, err
 	}
 	meta.RemoveStatusCondition(&host.Status.Conditions, ConditionLegacyRBACPresent)
-	return nil
+	return false, nil
+}
+
+// requeueForLegacyRBAC joins the legacy cleanup's requeue after into res, the
+// result the rest of Reconcile returns with err: the sooner non-zero requeue
+// wins. A result returned with an error is ignored -- the error's backoff
+// requeues -- so it is left as it is.
+//
+// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+func requeueForLegacyRBAC(res ctrl.Result, err error, after time.Duration) ctrl.Result {
+	if err != nil || after <= 0 {
+		return res
+	}
+	if res.RequeueAfter == 0 || after < res.RequeueAfter {
+		res.RequeueAfter = after
+	}
+	return res
 }
 
 // hostManagerUpgraded reports whether the redesigned host-manager has replaced

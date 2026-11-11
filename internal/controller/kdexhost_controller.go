@@ -386,9 +386,14 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// Task N9). Every non-deleting pass with its finalizer and Secrets in
 	// hand, ahead of the resolution steps' early returns and outside the
 	// release-hash gate; a failure is on the host's condition and blocks
-	// nothing else.
-	if err := r.cleanupLegacyRBAC(ctx, &host); err != nil {
-		log.Error(err, "failed to clean up legacy host-manager RBAC", "host", host.Name, "namespace", host.Namespace)
+	// nothing else. While legacy RBAC may remain, every return from here on
+	// requeues no later than RequeueDelay: no event marks the moment it can go.
+	legacyPending, cleanupErr := r.cleanupLegacyRBAC(ctx, &host)
+	if cleanupErr != nil {
+		log.Error(cleanupErr, "failed to clean up legacy host-manager RBAC", "host", host.Name, "namespace", host.Namespace)
+	}
+	if legacyPending {
+		defer func() { res = requeueForLegacyRBAC(res, err, r.RequeueDelay) }()
 	}
 
 	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
