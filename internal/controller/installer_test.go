@@ -54,12 +54,19 @@ type uninstallCountingHelmClient struct {
 	*MockHelmClient
 	mu    sync.Mutex
 	calls []string
+	// before, when set, runs ahead of each Uninstall; its error ends the call.
+	before func(name string) error
 }
 
 func (u *uninstallCountingHelmClient) Uninstall(name string) error {
 	u.mu.Lock()
 	u.calls = append(u.calls, name)
 	u.mu.Unlock()
+	if u.before != nil {
+		if err := u.before(name); err != nil {
+			return err
+		}
+	}
 	return u.MockHelmClient.Uninstall(name)
 }
 
@@ -323,8 +330,12 @@ func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
 	assertInstallerGone(t, fc)
 }
 
+// A record with nothing outside the namespace is the installer's to
+// uninstall; the operator only reads it.
 func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
-	r, fc, mock, factory := newTeardownFixture(t)
+	r, fc, _, _ := newTeardownFixture(t)
+	clients := newIdentityHelmClients("my-host")
+	clients.install(r)
 	deleteHost(t, fc, "my-host")
 	// One pass makes one decision about the namespace: the installer
 	// bootstrap reuses it rather than reading the namespace again.
@@ -342,12 +353,11 @@ func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !slices.Contains(mock.Uninstalled(), "my-host") {
-		t.Errorf("uninstalled %v, want my-host", mock.Uninstalled())
+	if !slices.Equal(clients.installer.calls, []string{"my-host"}) {
+		t.Errorf("installer uninstalls = %v, want [my-host]", clients.installer.calls)
 	}
-	ids := factory.identities()
-	if len(ids) == 0 || slices.ContainsFunc(ids, func(id utils.HelmIdentity) bool { return id != utils.HelmAsInstaller }) {
-		t.Errorf("teardown Helm identities = %v, want only HelmAsInstaller", ids)
+	if len(clients.operator.calls) != 0 {
+		t.Errorf("operator uninstalls = %v, want none", clients.operator.calls)
 	}
 	if got := readClusterReaderSubjects(t, fc); len(got) != 0 {
 		t.Errorf("cluster-reader subjects = %v, want the host's removed", got)

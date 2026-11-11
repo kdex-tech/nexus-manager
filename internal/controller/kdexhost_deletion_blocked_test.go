@@ -36,6 +36,11 @@ func (c *stuckUninstallHelmClient) ListReleases(map[string]string) ([]string, er
 	return nil, nil
 }
 
+// ReleaseObjects: no record lists anything outside its namespace.
+func (c *stuckUninstallHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) {
+	return nil, nil
+}
+
 // Keeping the finalizer when an uninstall fails (#51) is correct -- releasing it
 // would delete the CR while its releases still run. But it converts a silent
 // orphan into a host that sits in Terminating indefinitely, and the operator

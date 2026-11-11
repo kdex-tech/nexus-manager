@@ -149,3 +149,6 @@ func TestHelmClientCache_SeparatePerIdentity(t *testing.T) {
 		t.Fatalf("deleteHelmClient left %d clients", len(r.helmClients))
 	}
 }
+
+// ReleaseObjects: no record lists anything outside its namespace.
+func (s *stubHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) { return nil, nil }

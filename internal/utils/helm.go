@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,8 @@ import (
 	"helm.sh/helm/v4/pkg/getter"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
+	rspb "helm.sh/helm/v4/pkg/release/v1"
+	releaseutil "helm.sh/helm/v4/pkg/release/v1/util"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,6 +34,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -107,7 +112,17 @@ type ChartSpec struct {
 type HelmClientInterface interface {
 	InstallOrUpgrade(spec *ChartSpec) error
 	ListReleases(matchLabels map[string]string) ([]string, error)
+	ReleaseObjects(releaseName string) ([]ReleaseObject, error)
 	Uninstall(releaseName string) error
+}
+
+// ReleaseObject is one object a release's record lists. Namespace is as the
+// manifest states it: empty for a cluster-scoped object, or for a namespaced
+// one Helm places in the release's namespace.
+type ReleaseObject struct {
+	Kind      string
+	Name      string
+	Namespace string
 }
 
 // HelmClient is a wrapper around helm v4 SDK to simplify Helm operations.
@@ -330,6 +345,55 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 	}
 	key := chartPathKey(spec.ChartName, spec.Version, HashSecrets(h.secrets))
 	return sharedChartPaths.get(key, load)
+}
+
+// ReleaseObjects lists the objects in the manifest of the release's latest
+// revision: the record an uninstall acts on, whatever its status -- one that
+// failed part-way leaves it "uninstalling", still listing what it had yet to
+// delete. A release that does not exist lists nothing.
+//
+// The record is a Secret in the release's namespace, which whoever can write
+// Secrets there can forge: what it lists is a claim, not a fact.
+func (h *HelmClient) ReleaseObjects(releaseName string) ([]ReleaseObject, error) {
+	last, err := h.actionConfig.Releases.Last(releaseName)
+	if errors.Is(err, driver.ErrReleaseNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the record of release %s: %w", releaseName, err)
+	}
+	var manifest string
+	switch rel := last.(type) {
+	case *rspb.Release:
+		manifest = rel.Manifest
+	case rspb.Release:
+		manifest = rel.Manifest
+	default:
+		return nil, fmt.Errorf("failed to read the record of release %s: unsupported release type %T", releaseName, last)
+	}
+
+	docs := releaseutil.SplitManifests(manifest)
+	keys := slices.Collect(maps.Keys(docs))
+	sort.Sort(releaseutil.BySplitManifestsOrder(keys))
+	objs := make([]ReleaseObject, 0, len(keys))
+	for _, k := range keys {
+		var head struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(docs[k]), &head); err != nil {
+			return nil, fmt.Errorf("failed to parse the manifest of release %s: %w", releaseName, err)
+		}
+		if head.Kind == "" {
+			// A template that rendered only comments.
+			continue
+		}
+		objs = append(objs, ReleaseObject{Kind: head.Kind, Name: head.Metadata.Name, Namespace: head.Metadata.Namespace})
+	}
+	return objs, nil
 }
 
 // Uninstall uninstalls a Helm release, running none of its hooks. A release

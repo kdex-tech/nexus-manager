@@ -40,6 +40,10 @@ const (
 	// the binding alongside the hosts, and a teardown still uninstalling as
 	// the installer must not lose its grant part-way.
 	installerFinalizer = "kdex.dev/installer"
+
+	// kindClusterRole is the kind a roleRef or a release record names a
+	// ClusterRole by.
+	kindClusterRole = "ClusterRole"
 )
 
 // errNamespaceTerminating stops installer bootstrap in a namespace being
@@ -98,7 +102,7 @@ func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespa
 		return fmt.Errorf("failed to ensure the installer ServiceAccount in %q: %w", namespace, err)
 	}
 
-	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: installerClusterRoleName}
+	roleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: kindClusterRole, Name: installerClusterRoleName}
 	subjects := []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: utils.InstallerServiceAccountName, Namespace: namespace}}
 	rbKey := client.ObjectKey{Namespace: namespace, Name: installerRoleBindingName}
 	if err := ensureOwned(ctx, r, rbKey, func() *rbacv1.RoleBinding { return &rbacv1.RoleBinding{} },
@@ -264,16 +268,16 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 		return err
 	}
 	// Migration code: delete in release B (see the follow-up issue filed in
-	// Task N9). With legacy RBAC left, the release record may still list it,
-	// so the host-manager release is uninstalled as the operator; and only
-	// once that has succeeded is the legacy RBAC deleted.
+	// Task N9). Legacy RBAC left once the releases are gone -- or in a
+	// terminating namespace, whose deletion never removes it -- is deleted
+	// before the finalizer goes.
 	role, binding, err := r.legacyRBAC(ctx, host)
 	if err != nil {
 		return err
 	}
 	if terminating {
 		log.V(1).Info("namespace is terminating; its deletion removes the host's releases", "host", host.Name, "namespace", host.Namespace)
-	} else if err := r.uninstallHostReleases(ctx, host, secrets, legacyUninstallIdentity(role, binding), log); err != nil {
+	} else if err := r.uninstallHostReleases(ctx, host, secrets, log); err != nil {
 		return err
 	}
 	if err := r.deleteLegacyRBAC(ctx, role, binding); err != nil {
@@ -289,18 +293,18 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	return r.releaseInstallerIfUnused(ctx, host.Namespace, host.Name)
 }
 
-// uninstallHostReleases uninstalls the host-manager release as hostIdentity,
-// and every companion the host owns impersonating the namespace's installer
-// (a companion's record never held cluster-scoped objects). Its caller has
-// found the namespace not terminating. It bootstraps the installer first: a
-// host deleted before any helm run created it, or after a sibling's teardown
-// released it, would otherwise be refused every uninstall and hold its
-// finalizer forever.
+// uninstallHostReleases uninstalls the host-manager release as its record
+// requires (hostReleaseUninstallIdentity), and every companion the host owns
+// impersonating the namespace's installer (a companion's record never held
+// cluster-scoped objects). Its caller has found the namespace not
+// terminating. It bootstraps the installer first: a host deleted before any
+// helm run created it, or after a sibling's teardown released it, would
+// otherwise be refused every uninstall and hold its finalizer forever.
 //
 // Both uninstalls are attempted before any failure is returned, so one
 // blocked release does not strand the others; retrying is safe, since
 // uninstalling a release that is already gone succeeds.
-func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, hostIdentity utils.HelmIdentity, log logr.Logger) error {
+func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) error {
 	if err := r.ensureInstallerObjects(ctx, host.Namespace); err != nil {
 		return err
 	}
@@ -308,15 +312,24 @@ func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kd
 	if err != nil {
 		return err
 	}
-	hostClient := c
-	if hostIdentity != utils.HelmAsInstaller {
-		if hostClient, err = r.getOrCreateHelmClient(host.Name, host.Namespace, secrets, log.WithName("helm"), hostIdentity); err != nil {
-			return err
-		}
-	}
 
 	var uninstallErrs []error
-	if err := hostClient.Uninstall(host.Name); err != nil {
+	// Migration code: delete in release B (see the follow-up issue filed in
+	// Task N9). Then the host-manager release is the installer's, as its
+	// companions are.
+	operator, err := r.getOrCreateHelmClient(host.Name, host.Namespace, secrets, log.WithName("helm"), utils.HelmAsOperator)
+	var identity utils.HelmIdentity
+	if err == nil {
+		identity, err = r.hostReleaseUninstallIdentity(ctx, operator, host)
+	}
+	if err == nil {
+		hostClient := c
+		if identity == utils.HelmAsOperator {
+			hostClient = operator
+		}
+		err = hostClient.Uninstall(host.Name)
+	}
+	if err != nil {
 		log.Error(err, "failed to uninstall host manager release", "name", host.Name)
 		uninstallErrs = append(uninstallErrs, err)
 	}

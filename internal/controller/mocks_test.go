@@ -33,6 +33,8 @@ type MockHelmClient struct {
 	// persisted onto the storage Secret, merged (not replaced) on upgrade,
 	// and read back by List for selector matching. Keyed by release name.
 	releaseLabels map[string]map[string]string
+	// releaseObjects models what each release's record lists (ReleaseObjects).
+	releaseObjects map[string][]utils.ReleaseObject
 
 	failList bool
 	// failUninstall names releases whose Uninstall returns an error.
@@ -129,7 +131,29 @@ func (m *MockHelmClient) Uninstall(releaseName string) error {
 	}
 	m.uninstalledCharts = append(m.uninstalledCharts, releaseName)
 	delete(m.releaseLabels, releaseName)
+	delete(m.releaseObjects, releaseName)
 	return nil
+}
+
+// ReleaseObjects lists what the release's record holds: nothing for a release
+// that does not exist.
+func (m *MockHelmClient) ReleaseObjects(releaseName string) ([]utils.ReleaseObject, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.releaseLabels[releaseName]; !exists {
+		return nil, nil
+	}
+	return slices.Clone(m.releaseObjects[releaseName]), nil
+}
+
+// recordObjects makes the existing release's record list objs.
+func (m *MockHelmClient) recordObjects(releaseName string, objs ...utils.ReleaseObject) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.releaseObjects == nil {
+		m.releaseObjects = map[string][]utils.ReleaseObject{}
+	}
+	m.releaseObjects[releaseName] = objs
 }
 
 // ListReleases mirrors Helm's List+Selector: a release matches only when it
