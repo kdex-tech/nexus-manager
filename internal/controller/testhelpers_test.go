@@ -10,13 +10,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// withTeardownIndexes registers the indexes a host's teardown lists its
-// internal pages and translations by, as SetupWithManager does. b must
-// already have its scheme.
-func withTeardownIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
+// withHostIndexes registers the indexes the host reconciler lists by -- its
+// teardown's internal pages and translations, a full pass's attached
+// translations and extensions -- as SetupWithManager does. b must already
+// have its scheme.
+func withHostIndexes(b *fake.ClientBuilder) *fake.ClientBuilder {
 	return b.
 		WithIndex(&kdexv1alpha1.KDexInternalUtilityPage{}, hostIndexKey, indexInternalUtilityPageByHost).
-		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, indexInternalTranslationByHost)
+		WithIndex(&kdexv1alpha1.KDexInternalTranslation{}, hostIndexKey, indexInternalTranslationByHost).
+		WithIndex(&kdexv1alpha1.KDexTranslation{}, hostIndexKey, indexTranslationByHostRef).
+		WithIndex(&kdexv1alpha1.KDexHostExtension{}, hostIndexKey, indexExtensionByHostRef)
 }
 
 // hookedHelmClient runs its hooks around a MockHelmClient's calls, standing in

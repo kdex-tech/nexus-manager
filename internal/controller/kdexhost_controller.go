@@ -375,6 +375,15 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.Error(err, "failed to ensure the host-manager cluster-reader subject", "host", host.Name, "namespace", host.Namespace)
 	}
 
+	// Migration code: delete in release B (see the follow-up issue filed in
+	// Task N9). Every non-deleting pass with its finalizer and Secrets in
+	// hand, ahead of the resolution steps' early returns and outside the
+	// release-hash gate; a failure is on the host's condition and blocks
+	// nothing else.
+	if err := r.cleanupLegacyRBAC(ctx, &host); err != nil {
+		log.Error(err, "failed to clean up legacy host-manager RBAC", "host", host.Name, "namespace", host.Namespace)
+	}
+
 	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)

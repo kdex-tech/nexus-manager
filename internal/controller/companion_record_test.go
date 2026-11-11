@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +38,10 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	// A full pass reads the host-manager Deployment's readiness.
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	// The nexus chart ships the cluster-reader binding without subjects; the
 	// hosts live in namespace "ns".
 	objs := []client.Object{
@@ -46,7 +51,7 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 	for _, h := range hosts {
 		objs = append(objs, h)
 	}
-	b := withTeardownIndexes(fake.NewClientBuilder().WithScheme(scheme)).WithObjects(objs...).
+	b := withHostIndexes(fake.NewClientBuilder().WithScheme(scheme)).WithObjects(objs...).
 		WithStatusSubresource(&kdexv1alpha1.KDexHost{})
 	if funcs != nil {
 		b = b.WithInterceptorFuncs(*funcs)

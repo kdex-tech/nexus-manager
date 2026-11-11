@@ -71,7 +71,7 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 		},
 	}
 
-	fc := withTeardownIndexes(fake.NewClientBuilder().WithScheme(scheme)).
+	fc := withHostIndexes(fake.NewClientBuilder().WithScheme(scheme)).
 		WithObjects(host, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}).
 		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
 		Build()
