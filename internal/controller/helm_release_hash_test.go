@@ -120,10 +120,9 @@ func TestHelmReleaseHash_ChangesWithNexusConfiguration(t *testing.T) {
 	}
 }
 
-// spec.referenceNamespaces reaches host-manager as a chart value, so changing
-// it must re-render (and roll host-manager, whose cache namespaces are fixed
-// at startup). A per-host values override cannot widen it. host-manager#290.
-func TestHostManagerChartSpec_CarriesReferenceNamespaces(t *testing.T) {
+// Cross-namespace references are disabled in this release: the chart value is
+// always empty, whatever the spec or a per-host values override says.
+func TestHostManagerChartSpec_ReferenceNamespacesAlwaysEmpty(t *testing.T) {
 	r := hashReconciler(t)
 
 	before := baseHost()
@@ -137,8 +136,8 @@ func TestHostManagerChartSpec_CarriesReferenceNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildHostManagerChartSpec: %v", err)
 	}
-	if got, want := spec.Values["referenceNamespaces"], []any{"shared"}; !equalAny(got, want) {
-		t.Errorf("referenceNamespaces = %v, want %v (the host spec wins over a values override)", got, want)
+	if got := spec.Values["referenceNamespaces"]; !equalAny(got, []any{}) {
+		t.Errorf("referenceNamespaces = %v, want empty (cross-namespace references are disabled)", got)
 	}
 
 	plain, err := r.buildHostManagerChartSpec(before)
@@ -147,9 +146,6 @@ func TestHostManagerChartSpec_CarriesReferenceNamespaces(t *testing.T) {
 	}
 	if got := plain.Values["referenceNamespaces"]; !equalAny(got, []any{}) {
 		t.Errorf("default referenceNamespaces = %v, want empty (the host's own namespace only)", got)
-	}
-	if mustHash(t, r, after) == mustHash(t, r, before) {
-		t.Error("hash did not change when spec.referenceNamespaces changed")
 	}
 }
 

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -215,6 +216,30 @@ func ResolvePage(
 	return &kdexPage, false, ctrl.Result{}, nil
 }
 
+// errCrossNamespaceReference is the uniform refusal for a reference into a
+// namespace other than the referrer's. Cross-namespace references are disabled
+// in this release; the concept is kept for a later opt-in.
+var errCrossNamespaceReference = stderrors.New("references to other namespaces are disabled")
+
+func isOtherNamespace(referrer client.Object, namespace string) bool {
+	return namespace != "" && namespace != referrer.GetNamespace()
+}
+
+func refuseCrossNamespace(conditions *[]metav1.Condition) error {
+	kdexv1alpha1.SetConditions(
+		conditions,
+		kdexv1alpha1.ConditionStatuses{
+			Degraded:    metav1.ConditionTrue,
+			Progressing: metav1.ConditionFalse,
+			Ready:       metav1.ConditionFalse,
+		},
+		kdexv1alpha1.ConditionReasonReconcileError,
+		errCrossNamespaceReference.Error(),
+	)
+
+	return errCrossNamespaceReference
+}
+
 func ResolveKDexObjectReference(
 	ctx context.Context,
 	c client.Client,
@@ -250,10 +275,12 @@ func ResolveKDexObjectReference(
 	key := client.ObjectKey{Name: objectRef.Name}
 
 	if !isReferrerClustered && !strings.Contains(objectRef.Kind, "Cluster") {
-		key.Namespace = referrer.GetNamespace()
-		if objectRef.Namespace != "" {
-			key.Namespace = objectRef.Namespace
+		// Refused before any Get, so the outcome (and the message) cannot
+		// reveal whether the target exists in the other namespace.
+		if isOtherNamespace(referrer, objectRef.Namespace) {
+			return nil, true, ctrl.Result{}, refuseCrossNamespace(referrerConditions)
 		}
+		key.Namespace = referrer.GetNamespace()
 	}
 
 	if err := c.Get(ctx, key, obj.(client.Object)); err != nil {
@@ -341,18 +368,51 @@ func ResolveSecret(
 			Namespace: object.GetNamespace(),
 		}
 	case *kdexv1alpha1.KDexObjectReference:
-		namespace := object.GetNamespace()
-		if v.Namespace != "" {
-			namespace = v.Namespace
+		if isOtherNamespace(object, v.Namespace) {
+			return nil, true, ctrl.Result{}, refuseCrossNamespace(objectConditions)
 		}
 		secretName = types.NamespacedName{
 			Name:      v.Name,
-			Namespace: namespace,
+			Namespace: object.GetNamespace(),
 		}
 	default:
 		return nil, true, ctrl.Result{}, fmt.Errorf("unknown type %T", secretRef)
 	}
 
+	return getSecret(ctx, c, objectConditions, secretName, requeueDelay)
+}
+
+// ResolveOperatorSecret resolves a Secret named by the operator's own
+// NexusConfiguration (DefaultNpmSecretRef). It applies no namespace rule: the
+// operator, not the tenant, chose that namespace. Never use it for a reference
+// authored on a tenant resource.
+func ResolveOperatorSecret(
+	ctx context.Context,
+	c client.Client,
+	object client.Object,
+	conds *[]metav1.Condition,
+	ref *kdexv1alpha1.KDexObjectReference,
+	requeueDelay time.Duration,
+) (*corev1.Secret, bool, ctrl.Result, error) {
+	if ref == nil {
+		return nil, false, ctrl.Result{}, nil
+	}
+
+	namespace := object.GetNamespace()
+	if ref.Namespace != "" {
+		namespace = ref.Namespace
+	}
+
+	return getSecret(ctx, c, conds, types.NamespacedName{Name: ref.Name, Namespace: namespace}, requeueDelay)
+}
+
+func getSecret(
+	ctx context.Context,
+	c client.Client,
+	objectConditions *[]metav1.Condition,
+	secretName types.NamespacedName,
+	requeueDelay time.Duration,
+) (*corev1.Secret, bool, ctrl.Result, error) {
 	var secret corev1.Secret
 	if err := c.Get(ctx, secretName, &secret); err != nil {
 		if errors.IsNotFound(err) {

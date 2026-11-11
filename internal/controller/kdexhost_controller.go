@@ -127,6 +127,26 @@ type KDexHostReconciler struct {
 	helmRenderSemOnce sync.Once
 }
 
+// ConditionReferenceNamespacesDisabled is set on a host whose
+// spec.referenceNamespaces is non-empty: cross-namespace references are
+// disabled in this release, so the list is ignored.
+const ConditionReferenceNamespacesDisabled = "ReferenceNamespacesDisabled"
+
+func setReferenceNamespacesCondition(host *kdexv1alpha1.KDexHost) {
+	if len(host.Spec.ReferenceNamespaces) == 0 {
+		meta.RemoveStatusCondition(&host.Status.Conditions, ConditionReferenceNamespacesDisabled)
+		return
+	}
+
+	meta.SetStatusCondition(&host.Status.Conditions, metav1.Condition{
+		Type:               ConditionReferenceNamespacesDisabled,
+		Status:             metav1.ConditionTrue,
+		Reason:             "CrossNamespaceReferencesDisabled",
+		Message:            "cross-namespace references are disabled in this release; spec.referenceNamespaces is ignored",
+		ObservedGeneration: host.Generation,
+	})
+}
+
 // nolint:gocyclo
 func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logf.FromContext(ctx)
@@ -382,6 +402,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		kdexv1alpha1.ConditionReasonReconciling,
 		"Reconciling",
 	)
+	setReferenceNamespacesCondition(&host)
 
 	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
