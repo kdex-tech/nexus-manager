@@ -2,7 +2,7 @@ module github.com/kdex-tech/nexus-manager
 
 go 1.26.0
 
-replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.262
+replace kdex.dev/crds => github.com/kdex-tech/kdex-crds v0.14.263
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
