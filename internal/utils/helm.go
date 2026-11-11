@@ -255,6 +255,10 @@ func NewHelmClient(
 // -- would be missing from both until the operator restarted, and every later
 // install or upgrade of a chart using it would fail with "no matches for
 // kind". The caller holds h.mu, which every reader of Capabilities holds.
+//
+// Still needed through client-go v0.37.2 / Helm v4.3.1 (checked 2026-11-11):
+// Helm caches Capabilities per action.Configuration, and nothing in it
+// refreshes them or the memory-cached discovery between operations.
 func (h *HelmClient) freshen() {
 	h.actionConfig.Capabilities = nil
 	h.getter.invalidateDiscovery()

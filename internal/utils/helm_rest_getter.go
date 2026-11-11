@@ -24,9 +24,15 @@ const (
 )
 
 // restConfigGetter is the genericclioptions.RESTClientGetter a HelmClient acts
-// through: a fixed REST config, impersonating or not, in place of Helm's
-// kubeconfig loading (see NewHelmClient). It mirrors what Helm's own getter
-// adds to a config -- its rate limits and its retrying transport.
+// through: a fixed REST config, impersonating the installer, in place of
+// Helm's kubeconfig loading (see NewHelmClient). It mirrors what Helm's own
+// getter adds to a config -- its rate limits and its retrying transport.
+//
+// Still needed through client-go v0.37.2 / Helm v4.3.1 (checked 2026-11-11):
+// DeferredLoadingClientConfig skips the in-cluster fallback when
+// impersonation makes the config non-default. Delete it, and go back to
+// cli.EnvSettings' getter with KubeAsUser, once client-go keeps the in-cluster
+// fallback for an impersonating override.
 type restConfigGetter struct {
 	config    *rest.Config
 	namespace string

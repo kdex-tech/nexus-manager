@@ -40,9 +40,9 @@ func TestCheckCompanionSources(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error = %v, want it to mention %q", err, tt.wantErr)
 			}
-			var refused *companionRefusedError
-			if !errors.As(err, &refused) {
-				t.Errorf("error %T is not a companionRefusedError", err)
+			var refusal *refusalError
+			if !errors.As(err, &refusal) || refusal.reason != ConditionReasonCompanionChartRefused {
+				t.Errorf("error %#v is not a refusal under %s", err, ConditionReasonCompanionChartRefused)
 			}
 		})
 	}

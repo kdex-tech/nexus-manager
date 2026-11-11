@@ -879,13 +879,9 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 		// attempt was counted when it started.
 		host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
 		reason := kdexv1alpha1.ConditionReasonReconcileError
-		var refused *companionRefusedError
-		if errors.As(err, &refused) {
-			reason = ConditionReasonCompanionChartRefused
-		}
-		var unsupported *hostManagerChartUnsupportedError
-		if errors.As(err, &unsupported) {
-			reason = ConditionReasonHostManagerChartUnsupported
+		var refusal *refusalError
+		if errors.As(err, &refusal) {
+			reason = refusal.reason
 		}
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
@@ -1275,10 +1271,20 @@ func staleCompanions(recorded, declared, labelled map[string]struct{}) []string 
 // kdex-crds, which declares no reason for it.
 const ConditionReasonCompanionChartRefused kdexv1alpha1.ConditionReason = "CompanionChartRefused"
 
-// companionRefusedError is a companion chart the operator will not fetch.
-type companionRefusedError struct{ msg string }
+// refusalError is a host the operator refuses to act for, with the condition
+// reason that says why: a helm run that fails with one reports that reason in
+// place of the generic ReconcileError.
+type refusalError struct {
+	reason kdexv1alpha1.ConditionReason
+	msg    string
+}
 
-func (e *companionRefusedError) Error() string { return e.msg }
+func (e *refusalError) Error() string { return e.msg }
+
+// refused is a refusalError under reason.
+func refused(reason kdexv1alpha1.ConditionReason, format string, args ...any) error {
+	return &refusalError{reason: reason, msg: fmt.Sprintf(format, args...)}
+}
 
 // checkCompanionSources refuses every companion that is not an OCI chart
 // reference. A companion is tenant input, and only a registry fetch is bounded
@@ -1292,10 +1298,10 @@ func checkCompanionSources(host *kdexv1alpha1.KDexHost) error {
 	}
 	for _, companion := range host.Spec.Helm.CompanionCharts {
 		if !strings.HasPrefix(companion.Chart, "oci://") {
-			return &companionRefusedError{fmt.Sprintf("companion chart %q: chart %q must be an oci:// reference", companion.Name, companion.Chart)}
+			return refused(ConditionReasonCompanionChartRefused, "companion chart %q: chart %q must be an oci:// reference", companion.Name, companion.Chart)
 		}
 		if companion.Repository != "" {
-			return &companionRefusedError{fmt.Sprintf("companion chart %q: repository %q is not supported; companions are fetched from oci:// references only", companion.Name, companion.Repository)}
+			return refused(ConditionReasonCompanionChartRefused, "companion chart %q: repository %q is not supported; companions are fetched from oci:// references only", companion.Name, companion.Repository)
 		}
 	}
 	return nil

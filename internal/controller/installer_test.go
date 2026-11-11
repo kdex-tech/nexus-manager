@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -166,8 +169,9 @@ func TestEnsureInstaller_RecreatesAnObjectTheCacheStillHolds(t *testing.T) {
 	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
 	ctx := context.Background()
 	staleBinding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns", ResourceVersion: "999"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns", ResourceVersion: "999",
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "kcnas-operator"}},
+		RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
 	}
 	var staleReads int
 	r.APIReader = fc
@@ -197,14 +201,80 @@ func TestEnsureInstaller_RefusesABindingToAnotherRole(t *testing.T) {
 	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
 	ctx := context.Background()
 	if err := fc.Create(ctx, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "cluster-admin"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns",
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "kcnas-operator"}},
+		RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "cluster-admin"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.ensureInstaller(ctx, "ns"); err == nil {
 		t.Fatal("want an error for an installer binding to another role")
 	}
+}
+
+// A ServiceAccount or RoleBinding named after the installer that this operator
+// did not create is not adopted: it is refused, left as it is, and a helm run
+// says why under its own reason.
+func TestEnsureInstaller_RefusesWhatItDidNotCreate(t *testing.T) {
+	for _, existing := range []client.Object{
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"}},
+		&rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"},
+			RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
+			Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "someone-else", Namespace: "ns"}},
+		},
+	} {
+		t.Run(fmt.Sprintf("%T", existing), func(t *testing.T) {
+			mock := NewMockHelmClient(nil)
+			r, fc := newHelmReconciler(t, mock, nil, helmHost("my-host"))
+			ctx := context.Background()
+			if err := fc.Create(ctx, existing); err != nil {
+				t.Fatal(err)
+			}
+			before := existing.DeepCopyObject().(client.Object)
+			if err := fc.Get(ctx, client.ObjectKeyFromObject(existing), before); err != nil {
+				t.Fatal(err)
+			}
+
+			err := r.ensureInstaller(ctx, "ns")
+			if err == nil || !strings.Contains(err.Error(), "app.kubernetes.io/managed-by=kcnas-operator") {
+				t.Fatalf("ensureInstaller = %v, want a refusal naming the label", err)
+			}
+			after := existing.DeepCopyObject().(client.Object)
+			if err := fc.Get(ctx, client.ObjectKeyFromObject(existing), after); err != nil {
+				t.Fatal(err)
+			}
+			if after.GetResourceVersion() != before.GetResourceVersion() {
+				t.Errorf("%T was changed: it is not the operator's", existing)
+			}
+
+			r.runAsyncHelmReconcile(ctx, "ns", "my-host", "hash", nil, logr.Discard())
+			if got := mock.Installed(); len(got) != 0 {
+				t.Errorf("installed %v, want nothing", got)
+			}
+			cond := meta.FindStatusCondition(getHost(t, fc, "my-host").Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
+			if cond == nil || cond.Reason != string(ConditionReasonInstallerConflict) {
+				t.Errorf("Degraded = %+v, want reason %s", cond, ConditionReasonInstallerConflict)
+			}
+		})
+	}
+}
+
+// Releasing the installer deletes only what this operator created.
+func TestReleaseInstaller_LeavesWhatItDidNotCreate(t *testing.T) {
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+	ctx := context.Background()
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"}}
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "view"},
+	}
+	createObjects(t, fc, sa, rb)
+	if err := r.releaseInstallerIfUnused(ctx, "ns", "departing"); err != nil {
+		t.Fatal(err)
+	}
+	assertExists(t, fc, sa)
+	assertExists(t, fc, rb)
 }
 
 // A terminating namespace rejects creates: nothing is attempted, and the error
@@ -436,12 +506,22 @@ func TestCacheOptions_LabelSelectedRBACKinds(t *testing.T) {
 // invisible to the cache, so the create meets AlreadyExists and must adopt the
 // live object rather than fail every run.
 var _ = Describe("Installer bootstrap through the label-selected cache", func() {
-	It("adopts an unlabelled ServiceAccount and releases both objects", func() {
-		ns := "installer-adopt"
+	It("refuses an unlabelled ServiceAccount the cache cannot see, and never deletes it", func() {
+		ns := "installer-unlabelled"
 		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
 		Expect(k8sClient.Create(ctx, &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: ns},
 		})).To(Succeed())
+
+		err := hostReconciler.ensureInstaller(ctx, ns)
+		Expect(err).To(MatchError(ContainSubstring("will not adopt it")))
+		Expect(hostReconciler.releaseInstallerIfUnused(ctx, ns, "departing")).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "kdex-installer"}, &corev1.ServiceAccount{})).To(Succeed())
+	})
+
+	It("creates both objects, finds them through the cache, and releases them", func() {
+		ns := "installer-lifecycle"
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
 
 		Expect(hostReconciler.ensureInstaller(ctx, ns)).To(Succeed())
 		Expect(hostReconciler.ensureInstaller(ctx, ns)).To(Succeed())

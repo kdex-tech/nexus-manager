@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Masterminds/semver/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -14,46 +13,14 @@ import (
 	"k8s.io/client-go/util/retry"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
-
-// MinHostManagerChartVersion is the oldest host-manager chart this operator
-// installs. Older charts still ship a ClusterRole/roleRef of their own, which
-// the installer identity can no longer create.
-const MinHostManagerChartVersion = "0.33.0"
-
-// ConditionReasonHostManagerChartUnsupported is the reason on a host whose
-// host-manager chart version is below MinHostManagerChartVersion.
-const ConditionReasonHostManagerChartUnsupported kdexv1alpha1.ConditionReason = "HostManagerChartUnsupported"
 
 // clusterReaderBindingName is the fixed ClusterRoleBinding shipped by the
 // nexus chart and kustomize WITHOUT subjects: this operator owns the subject
 // list at runtime, so a Helm upgrade must not reset it.
 const clusterReaderBindingName = "kcnas-operator-host-manager-cluster-reader"
-
-// hostManagerChartUnsupportedError is a host-manager chart version the
-// operator will not install.
-type hostManagerChartUnsupportedError struct{ msg string }
-
-func (e *hostManagerChartUnsupportedError) Error() string { return e.msg }
-
-// checkHostManagerChartVersion refuses any explicit pin that is not strict
-// semver at or above MinHostManagerChartVersion (ranges and tags such as
-// "^0.33" or "latest" included: the floor cannot be verified for them). An
-// empty version is accepted: the shipped default leaves it empty and Helm
-// resolves the registry's latest chart.
-func checkHostManagerChartVersion(version string) error {
-	if version == "" {
-		return nil
-	}
-	v, err := semver.StrictNewVersion(version)
-	if err != nil {
-		return &hostManagerChartUnsupportedError{fmt.Sprintf("host-manager chart version %q is not an exact semantic version; at least %s is required", version, MinHostManagerChartVersion)}
-	}
-	if v.LessThan(semver.MustParse(MinHostManagerChartVersion)) {
-		return &hostManagerChartUnsupportedError{fmt.Sprintf("host-manager chart version %q is older than the minimum supported %s", version, MinHostManagerChartVersion)}
-	}
-	return nil
-}
 
 // ensureClusterReaderSubject adds the ServiceAccount to the fixed
 // cluster-reader ClusterRoleBinding. Idempotent.
@@ -180,7 +147,7 @@ func (r *KDexHostReconciler) grantHostManagerServiceAccount(ctx context.Context,
 		return nil
 	}
 	if previous != "" {
-		if err := r.removeClusterReaderSubject(ctx, host.Namespace, previous); err != nil {
+		if err := r.releaseClusterReaderSubject(ctx, host, previous); err != nil {
 			return err
 		}
 	}
@@ -191,16 +158,76 @@ func (r *KDexHostReconciler) grantHostManagerServiceAccount(ctx context.Context,
 	return err
 }
 
+// releaseClusterReaderSubject removes ServiceAccount host.Namespace/sa --
+// recorded for host, which no longer needs it (teardown, or a rename) -- from
+// the cluster-reader binding, unless another KDexHost in the namespace that is
+// not itself terminating has the same ServiceAccount recorded: one subject
+// serves every host that runs as it, and removing it would strip that host's
+// reads. The hosts are listed live, so one recorded since the cache last saw
+// it keeps the subject.
+func (r *KDexHostReconciler) releaseClusterReaderSubject(ctx context.Context, host *kdexv1alpha1.KDexHost, sa string) error {
+	var hosts kdexv1alpha1.KDexHostList
+	if err := r.reader().List(ctx, &hosts, client.InNamespace(host.Namespace)); err != nil {
+		return fmt.Errorf("failed to list the namespace's KDexHosts: %w", err)
+	}
+	for i := range hosts.Items {
+		h := &hosts.Items[i]
+		if h.Name != host.Name && h.DeletionTimestamp.IsZero() && recordedHostManagerServiceAccount(h) == sa {
+			return nil
+		}
+	}
+	if err := r.removeClusterReaderSubject(ctx, host.Namespace, sa); err != nil {
+		return fmt.Errorf("failed to remove the cluster-reader subject %s/%s: %w", host.Namespace, sa, err)
+	}
+	return nil
+}
+
 // healClusterReaderSubject re-adds the recorded host-manager ServiceAccount to
 // the cluster-reader binding on every reconcile, outside the release-hash gate
 // and regardless of the run's status: an installed host-manager keeps running
 // while its run is Failed or InProgress, and must not lose its reads if the
-// binding is reset. A failure is logged by the caller, not fatal: the next
-// reconcile retries it.
+// binding is reset. It reads the binding from the cache (field-selected to
+// this one binding) and goes live -- the optimistic-lock read-modify-update --
+// only when the subject is missing, so a settled fleet costs no API call per
+// reconcile. A failure is logged by the caller, not fatal: the next reconcile
+// retries it.
 func (r *KDexHostReconciler) healClusterReaderSubject(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
 	sa := recordedHostManagerServiceAccount(host)
 	if sa == "" {
 		return nil
 	}
+	cached := &rbacv1.ClusterRoleBinding{}
+	if err := r.Get(ctx, types.NamespacedName{Name: clusterReaderBindingName}, cached); err == nil &&
+		slices.Contains(cached.Subjects, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: host.Namespace}) {
+		return nil
+	}
 	return r.ensureClusterReaderSubject(ctx, host.Namespace, sa)
+}
+
+// clusterReaderBindingRequests maps an event on the cluster-reader binding to
+// every KDexHost whose recorded ServiceAccount it no longer holds, so a
+// subjects list reset out of band heals at once rather than at each host's
+// next unrelated reconcile. A host whose subject is there is not woken: each
+// grant writes the binding, and waking every host on each would make a fleet
+// rollout quadratic.
+func (r *KDexHostReconciler) clusterReaderBindingRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	binding, ok := obj.(*rbacv1.ClusterRoleBinding)
+	if !ok || binding.Name != clusterReaderBindingName {
+		return nil
+	}
+	var hosts kdexv1alpha1.KDexHostList
+	if err := r.List(ctx, &hosts); err != nil {
+		logf.FromContext(ctx).Error(err, "failed to list KDexHosts for the cluster-reader binding")
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range hosts.Items {
+		h := &hosts.Items[i]
+		sa := recordedHostManagerServiceAccount(h)
+		if sa == "" || slices.Contains(binding.Subjects, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: h.Namespace}) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(h)})
+	}
+	return requests
 }

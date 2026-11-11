@@ -12,7 +12,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +48,11 @@ const (
 	// ClusterRole by.
 	kindClusterRole = "ClusterRole"
 )
+
+// ConditionReasonInstallerConflict is the reason on a host whose namespace
+// holds a ServiceAccount or RoleBinding named after the installer that this
+// operator did not create.
+const ConditionReasonInstallerConflict kdexv1alpha1.ConditionReason = "InstallerConflict"
 
 // errNamespaceTerminating stops installer bootstrap in a namespace being
 // deleted, which rejects creates. It wraps errHostTerminating: every host in
@@ -135,6 +139,12 @@ func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespa
 	return nil
 }
 
+// operatorOwned reports whether obj carries the label this operator puts on
+// what it creates.
+func operatorOwned(obj client.Object) bool {
+	return obj.GetLabels()[LabelManagedBy] == ManagedByOperator
+}
+
 // ensureLabels adds the operator's labels to obj, reporting whether it changed.
 func ensureLabels(obj client.Object) bool {
 	labels := obj.GetLabels()
@@ -161,15 +171,25 @@ func ensureLabels(obj client.Object) bool {
 // object with only the key set) and reports whether an existing object needs
 // writing; a new one is always created.
 //
+// An existing object is this operator's only if it carries the operator's
+// label: one without it was made by someone else, and adopting it would hand
+// the installer's grant to whatever it binds or the installer's name to
+// whoever runs as it. It is refused (ConditionReasonInstallerConflict), for an
+// administrator to remove or label.
+//
 // The cached read is label-selected (CacheOptions), so an object that exists
 // without the label is invisible to it: a create that meets one, or an update
 // that meets a newer version, re-reads it live -- into a fresh object, so
-// nothing from the failed attempt survives the decode -- and adopts it. An
-// update that finds the cached object deleted since creates it anew.
+// nothing from the failed attempt survives the decode -- and refuses it if it
+// is not labelled. An update that finds the cached object deleted since
+// creates it anew.
 func ensureOwned[T client.Object](ctx context.Context, r *KDexHostReconciler, key client.ObjectKey, newObj func() T, mutate func(T) (bool, error)) error {
 	obj := newObj()
 	err := r.Get(ctx, key, obj)
 	if err == nil {
+		if !operatorOwned(obj) {
+			return notOperatorOwned(obj)
+		}
 		changed, err := mutate(obj)
 		if err != nil || !changed {
 			return err
@@ -207,12 +227,22 @@ func ensureOwnedLive[T client.Object](ctx context.Context, r *KDexHostReconciler
 		if err := r.reader().Get(ctx, key, live); err != nil {
 			return err
 		}
+		if !operatorOwned(live) {
+			return notOperatorOwned(live)
+		}
 		changed, err := mutate(live)
 		if err != nil || !changed {
 			return err
 		}
 		return r.Update(ctx, live, client.FieldOwner(r.ControllerID))
 	})
+}
+
+// notOperatorOwned refuses obj, found without the operator's label.
+func notOperatorOwned(obj client.Object) error {
+	return refused(ConditionReasonInstallerConflict,
+		"%s/%s exists without the %s=%s label: it was not created by this operator, which will not adopt it; remove it, or label it if it is the operator's",
+		obj.GetNamespace(), obj.GetName(), LabelManagedBy, ManagedByOperator)
 }
 
 // releaseInstallerIfUnused removes the namespace's installer identity once no
@@ -234,12 +264,28 @@ func (r *KDexHostReconciler) releaseInstallerIfUnused(ctx context.Context, names
 	}
 
 	var errs []error
-	for _, obj := range []client.Object{
-		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: installerRoleBindingName, Namespace: namespace}},
-		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: utils.InstallerServiceAccountName, Namespace: namespace}},
+	for _, o := range []struct {
+		name string
+		obj  client.Object
+	}{
+		{installerRoleBindingName, &rbacv1.RoleBinding{}},
+		{utils.InstallerServiceAccountName, &corev1.ServiceAccount{}},
 	} {
-		if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
-			errs = append(errs, fmt.Errorf("failed to delete the installer %T %s/%s: %w", obj, namespace, obj.GetName(), err))
+		obj, key := o.obj, client.ObjectKey{Namespace: namespace, Name: o.name}
+		if err := r.reader().Get(ctx, key, obj); err != nil {
+			if !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("failed to read the installer %T %s: %w", obj, key, err))
+			}
+			continue
+		}
+		// Only what this operator made, and only the object it read: one
+		// replaced since is matched afresh by the next teardown.
+		if !operatorOwned(obj) {
+			continue
+		}
+		uid := obj.GetUID()
+		if err := r.Delete(ctx, obj, client.Preconditions{UID: &uid}); client.IgnoreNotFound(err) != nil {
+			errs = append(errs, fmt.Errorf("failed to delete the installer %T %s: %w", obj, key, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -276,8 +322,8 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	}
 
 	if sa := recordedHostManagerServiceAccount(host); sa != "" {
-		if err := r.removeClusterReaderSubject(ctx, host.Namespace, sa); err != nil {
-			return fmt.Errorf("failed to remove the cluster-reader subject %s/%s: %w", host.Namespace, sa, err)
+		if err := r.releaseClusterReaderSubject(ctx, host, sa); err != nil {
+			return err
 		}
 	}
 
