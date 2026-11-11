@@ -110,6 +110,9 @@ func (r *KDexHostReconciler) hostManagerServiceAccount(ctx context.Context, host
 
 // clusterReaderGranted reports whether the cluster-reader binding, read live,
 // holds ServiceAccount namespace/sa. A missing binding holds no one.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue). Only the
+// legacy RBAC upgrade proof (hostManagerUpgraded) reads it.
 func (r *KDexHostReconciler) clusterReaderGranted(ctx context.Context, namespace, sa string) (bool, error) {
 	binding := &rbacv1.ClusterRoleBinding{}
 	if err := r.reader().Get(ctx, types.NamespacedName{Name: clusterReaderBindingName}, binding); err != nil {

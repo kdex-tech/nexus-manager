@@ -117,6 +117,9 @@ type ChartSpec struct {
 type HelmClientInterface interface {
 	InstallOrUpgrade(spec *ChartSpec) error
 	ListReleases(matchLabels map[string]string) ([]string, error)
+	// Migration code: delete in release B (privilege-redesign follow-up issue).
+	// The legacy RBAC upgrade proof's release status, and the teardown's
+	// record rewrite.
 	ReleaseStatus(releaseName string) (string, error)
 	DropClusterRBACFromRecord(releaseName string) ([]string, error)
 	Uninstall(releaseName string) error
@@ -377,6 +380,8 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 
 // latestRevision reads the release's latest revision from storage, nil for a
 // release that does not exist.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func (h *HelmClient) latestRevision(releaseName string) (*rspb.Release, error) {
 	last, err := h.actionConfig.Releases.Last(releaseName)
 	if errors.Is(err, driver.ErrReleaseNotFound) {
@@ -399,6 +404,9 @@ func (h *HelmClient) latestRevision(releaseName string) (*rspb.Release, error) {
 // "failed", "pending-upgrade", ...), or "" for a release that does not exist.
 // It reads storage without the client's lock, as Uninstall does: a read must
 // not wait out an install in progress.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue). Only the
+// legacy RBAC upgrade proof (hostManagerUpgraded) reads it.
 func (h *HelmClient) ReleaseStatus(releaseName string) (string, error) {
 	rel, err := h.latestRevision(releaseName)
 	if err != nil || rel == nil || rel.Info == nil {
@@ -465,6 +473,8 @@ func (h *HelmClient) DropClusterRBACFromRecord(releaseName string) ([]string, er
 // clusterRBACOrList decodes one manifest document as Helm's resource builder
 // does and reports whether DropClusterRBACFromRecord drops it, naming it when
 // it does.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func clusterRBACOrList(doc string) (string, bool) {
 	raw, err := yaml.YAMLToJSON([]byte(doc))
 	if err != nil {

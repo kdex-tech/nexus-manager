@@ -303,10 +303,10 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	if err != nil {
 		return err
 	}
-	// Migration code: delete in release B (privilege-redesign follow-up
-	// issue). nexus deletes the host's legacy RBAC itself -- matched by UID
-	// and Helm ownership, never by the release record -- before the
-	// uninstall, which then no longer needs to.
+	// Migration code: delete in release B (privilege-redesign follow-up issue).
+	// nexus deletes the host's legacy RBAC itself -- matched by UID and Helm
+	// ownership, never by the release record -- before the uninstall, which
+	// then no longer needs to.
 	role, binding, err := r.legacyRBAC(ctx, host)
 	if err != nil {
 		return err
@@ -353,10 +353,10 @@ func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kd
 	}
 
 	var uninstallErrs []error
-	// Migration code: delete in release B (privilege-redesign follow-up
-	// issue). A pre-redesign record still lists the legacy RBAC teardownHost
-	// has just deleted, which the installer may not delete: drop it from the
-	// record so the uninstall does not fail on it.
+	// Migration code: delete in release B (privilege-redesign follow-up issue).
+	// A pre-redesign record still lists the legacy RBAC teardownHost has just
+	// deleted, which the installer may not delete: drop it from the record so
+	// the uninstall does not fail on it.
 	dropped, err := c.DropClusterRBACFromRecord(host.Name)
 	if len(dropped) != 0 {
 		log.Info("dropped cluster-scoped RBAC from the host-manager release record before uninstalling it",

@@ -36,6 +36,7 @@ func (c *stuckUninstallHelmClient) ListReleases(map[string]string) ([]string, er
 	return nil, nil
 }
 
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 // ReleaseStatus: no release has a recorded status.
 func (c *stuckUninstallHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
 

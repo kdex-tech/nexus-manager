@@ -245,6 +245,10 @@ const mockInstaller = "system:serviceaccount:ns:kdex-installer"
 
 // recordDoc is one document of a release record, as far as an installer's
 // uninstall of it cares.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue). With it go
+// records, statuses, rewrites, record, recordOf, setStatus, Rewrites,
+// ReleaseStatus and DropClusterRBACFromRecord.
 type recordDoc struct {
 	Kind, Name string
 	// Namespace is as the manifest states it: empty for the release's own.

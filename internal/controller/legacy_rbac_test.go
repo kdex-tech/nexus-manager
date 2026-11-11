@@ -1,3 +1,6 @@
+// Migration code: delete in release B (privilege-redesign follow-up issue).
+// Every test in this file exercises the legacy RBAC migration.
+
 package controller
 
 import (

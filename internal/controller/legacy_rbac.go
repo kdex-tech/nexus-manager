@@ -32,7 +32,7 @@ import (
 // (HelmClientInterface.DropClusterRBACFromRecord) and runs as the installer
 // like every other Helm action.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 const (
 	// ConditionLegacyRBACPresent is True on a host while its legacy
 	// cluster-scoped RBAC remains, and absent once it is gone.
@@ -51,7 +51,7 @@ const (
 // host's release: the release name alone is not enough, since same-named hosts
 // in two namespaces render same-named cluster-scoped objects.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func helmReleasedBy(obj client.Object, host *kdexv1alpha1.KDexHost) bool {
 	a := obj.GetAnnotations()
 	return a[helmReleaseNameAnnotation] == host.Name && a[helmReleaseNamespaceAnnotation] == host.Namespace
@@ -59,7 +59,7 @@ func helmReleasedBy(obj client.Object, host *kdexv1alpha1.KDexHost) bool {
 
 // legacyBindingName is the name the legacy chart gave the host's binding.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func legacyBindingName(host *kdexv1alpha1.KDexHost) string {
 	return host.Name + "-" + host.Namespace
 }
@@ -69,7 +69,7 @@ func legacyBindingName(host *kdexv1alpha1.KDexHost) string {
 // legacy binding was pointed at -- is not annotated for the release, and is
 // never this release's to delete.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func isLegacyRole(role *rbacv1.ClusterRole, host *kdexv1alpha1.KDexHost) bool {
 	return role.Name == host.Name && helmReleasedBy(role, host)
 }
@@ -80,7 +80,7 @@ func isLegacyRole(role *rbacv1.ClusterRole, host *kdexv1alpha1.KDexHost) bool {
 // release, and bind a ClusterRole. Any ClusterRole: the legacy chart bound a
 // shared one when the operator set HOST_MANAGER_CLUSTER_ROLE.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func isLegacyBinding(binding *rbacv1.ClusterRoleBinding, host *kdexv1alpha1.KDexHost) bool {
 	return binding.Name == legacyBindingName(host) && helmReleasedBy(binding, host) && binding.RoleRef.Kind == kindClusterRole
 }
@@ -90,7 +90,7 @@ func isLegacyBinding(binding *rbacv1.ClusterRoleBinding, host *kdexv1alpha1.KDex
 // live: ClusterRoles are not cached, and the ClusterRoleBinding cache holds
 // only the cluster-reader binding.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func (r *KDexHostReconciler) legacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost) (role *rbacv1.ClusterRole, binding *rbacv1.ClusterRoleBinding, err error) {
 	role = &rbacv1.ClusterRole{}
 	if err := r.reader().Get(ctx, client.ObjectKey{Name: host.Name}, role); err != nil {
@@ -116,7 +116,7 @@ func (r *KDexHostReconciler) legacyRBAC(ctx context.Context, host *kdexv1alpha1.
 
 // legacyRBACNames names what legacyRBAC found, for the condition's message.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func legacyRBACNames(role *rbacv1.ClusterRole, binding *rbacv1.ClusterRoleBinding) string {
 	var names []string
 	if role != nil {
@@ -133,7 +133,7 @@ func legacyRBACNames(role *rbacv1.ClusterRole, binding *rbacv1.ClusterRoleBindin
 // API server refuses to delete (a Conflict, so the next pass matches afresh).
 // One already gone is no error.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func (r *KDexHostReconciler) deleteLegacyRBAC(ctx context.Context, role *rbacv1.ClusterRole, binding *rbacv1.ClusterRoleBinding) error {
 	var objs []client.Object
 	if role != nil {
@@ -155,7 +155,7 @@ func (r *KDexHostReconciler) deleteLegacyRBAC(ctx context.Context, role *rbacv1.
 // setLegacyRBACCondition sets ConditionLegacyRBACPresent on the in-memory
 // host; Reconcile's status patch writes it.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func setLegacyRBACCondition(host *kdexv1alpha1.KDexHost, status metav1.ConditionStatus, reason, message string) {
 	meta.SetStatusCondition(&host.Status.Conditions, metav1.Condition{
 		Type:               ConditionLegacyRBACPresent,
@@ -179,7 +179,7 @@ func setLegacyRBACCondition(host *kdexv1alpha1.KDexHost, status metav1.Condition
 // Available stays True through its rollout, so no event follows the moment
 // the proof is met.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets) (pending bool, err error) {
 	role, binding, err := r.legacyRBAC(ctx, host)
 	if err != nil {
@@ -219,7 +219,7 @@ func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1
 // wins. A result returned with an error is ignored -- the error's backoff
 // requeues -- so it is left as it is.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func requeueForLegacyRBAC(res ctrl.Result, err error, after time.Duration) ctrl.Result {
 	if err != nil || after <= 0 {
 		return res
@@ -293,7 +293,7 @@ func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdex
 // and every replica runs it -- no old one left terminating -- with at least
 // one available.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 func deploymentRolledOut(d *appsv1.Deployment) bool {
 	replicas := int32(1)
 	if d.Spec.Replicas != nil {

@@ -51,6 +51,7 @@ func (m *concurrencyTrackingHelmClient) ListReleases(map[string]string) ([]strin
 	return nil, nil
 }
 
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 // ReleaseStatus: no release has a recorded status.
 func (m *concurrencyTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
 
@@ -171,6 +172,7 @@ func (m *pruneTrackingHelmClient) ListReleases(map[string]string) ([]string, err
 	return []string{"orphaned-companion"}, nil
 }
 
+// Migration code: delete in release B (privilege-redesign follow-up issue).
 // ReleaseStatus: no release has a recorded status.
 func (m *pruneTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
 
