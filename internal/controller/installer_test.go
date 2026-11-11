@@ -85,8 +85,8 @@ func assertInstallerPresent(t *testing.T, c client.Client) {
 	if rb.Labels["app.kubernetes.io/managed-by"] != "kcnas-operator" {
 		t.Errorf("RoleBinding labels = %v, want app.kubernetes.io/managed-by=kcnas-operator", rb.Labels)
 	}
-	if !slices.Equal(rb.Finalizers, []string{"kdex.dev/installer"}) {
-		t.Errorf("RoleBinding finalizers = %v, want [kdex.dev/installer]", rb.Finalizers)
+	if len(rb.Finalizers) != 0 {
+		t.Errorf("RoleBinding finalizers = %v, want none: a namespace deletion must never wait on it", rb.Finalizers)
 	}
 	if len(rb.OwnerReferences) != 0 {
 		t.Errorf("RoleBinding ownerReferences = %v, want none", rb.OwnerReferences)
@@ -135,14 +135,17 @@ func TestEnsureInstaller_Idempotent(t *testing.T) {
 	}
 }
 
-// An installer binding found with a borrowed subject, no finalizer or no label
-// is healed: it grants the installer and nothing else.
+// An installer binding found with a borrowed subject, or the finalizer earlier
+// builds put on it, is healed: it grants the installer and nothing else, and
+// holds no namespace deletion.
 func TestEnsureInstaller_HealsAnExistingBinding(t *testing.T) {
 	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
 	ctx := context.Background()
 	if err := fc.Create(ctx, &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns",
+			Labels:     map[string]string{"app.kubernetes.io/managed-by": "kcnas-operator"},
+			Finalizers: []string{"kdex.dev/installer"}},
+		RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
 		Subjects: []rbacv1.Subject{
 			{Kind: "ServiceAccount", Name: "kdex-installer", Namespace: "ns"},
 			{Kind: "ServiceAccount", Name: "borrower", Namespace: "ns"},
@@ -448,7 +451,7 @@ var _ = Describe("Installer bootstrap through the label-selected cache", func() 
 		Expect(sa.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "kcnas-operator"))
 		rb := &rbacv1.RoleBinding{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "kdex-installer"}, rb)).To(Succeed())
-		Expect(rb.Finalizers).To(ConsistOf("kdex.dev/installer"))
+		Expect(rb.Finalizers).To(BeEmpty())
 		Expect(rb.RoleRef.Name).To(Equal("kcnas-operator-installer"))
 
 		// No KDexHost lives in the namespace.

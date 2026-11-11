@@ -35,11 +35,15 @@ const (
 	// ServiceAccount it binds.
 	installerRoleBindingName = utils.InstallerServiceAccountName
 
-	// installerFinalizer holds the installer RoleBinding until the last host
-	// in its namespace has finished teardown: a namespace deletion removes
-	// the binding alongside the hosts, and a teardown still uninstalling as
-	// the installer must not lose its grant part-way.
-	installerFinalizer = "kdex.dev/installer"
+	// legacyInstallerFinalizer is the finalizer earlier builds of this
+	// branch put on the installer RoleBinding. It protected almost nothing
+	// -- reconciles are serialized and teardown is synchronous -- and a
+	// rollback to an operator that does not know it would leave it in every
+	// host namespace, holding namespace deletion. ensureInstallerObjects
+	// removes it wherever it finds it; nothing adds it.
+	//
+	// Migration code: delete in release B (privilege-redesign follow-up issue).
+	legacyInstallerFinalizer = "kdex.dev/installer"
 
 	// kindClusterRole is the kind a roleRef or a release record names a
 	// ClusterRole by.
@@ -72,12 +76,13 @@ func (r *KDexHostReconciler) namespaceTerminating(ctx context.Context, namespace
 
 // ensureInstaller bootstraps the namespace's installer identity: the
 // ServiceAccount utils.InstallerServiceAccountName and a RoleBinding granting
-// it installerClusterRoleName, both labelled as this operator's and the
-// RoleBinding holding installerFinalizer. Neither has an owner: several hosts
-// may share the namespace, so no one host owns them (releaseInstallerIfUnused
-// removes them after the last). Idempotent; an existing object is adopted and
-// healed (label, finalizer, subjects). In a terminating namespace it creates
-// nothing and returns errNamespaceTerminating.
+// it installerClusterRoleName, both labelled as this operator's. Neither has
+// an owner or a finalizer: several hosts may share the namespace, so no one
+// host owns them (releaseInstallerIfUnused removes them after the last), and
+// a namespace deletion must never wait on them. Idempotent; an existing
+// object is healed (label, subjects, legacyInstallerFinalizer removed). In a
+// terminating namespace it creates nothing and returns
+// errNamespaceTerminating.
 func (r *KDexHostReconciler) ensureInstaller(ctx context.Context, namespace string) error {
 	terminating, err := r.namespaceTerminating(ctx, namespace)
 	if err != nil {
@@ -115,7 +120,7 @@ func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespa
 				return false, fmt.Errorf("it binds %s %q, not ClusterRole %q", rb.RoleRef.Kind, rb.RoleRef.Name, installerClusterRoleName)
 			}
 			changed := ensureLabels(rb)
-			if controllerutil.AddFinalizer(rb, installerFinalizer) {
+			if controllerutil.RemoveFinalizer(rb, legacyInstallerFinalizer) {
 				changed = true
 			}
 			// Exactly the installer: an added subject would borrow its grant.
@@ -212,8 +217,8 @@ func ensureOwnedLive[T client.Object](ctx context.Context, r *KDexHostReconciler
 
 // releaseInstallerIfUnused removes the namespace's installer identity once no
 // KDexHost other than departingHost is left in it that is not itself
-// terminating: it removes the RoleBinding's finalizer, then deletes the
-// RoleBinding and the ServiceAccount. A host whose teardown is still to run
+// terminating: it deletes the RoleBinding and the ServiceAccount. A host
+// whose teardown is still to run
 // re-creates them (ensureInstaller) before it uninstalls. Idempotent; the
 // hosts are listed live, so one created since the cache last saw the
 // namespace keeps the installer.
@@ -226,21 +231,6 @@ func (r *KDexHostReconciler) releaseInstallerIfUnused(ctx context.Context, names
 		if h.Name != departingHost && h.DeletionTimestamp.IsZero() {
 			return nil
 		}
-	}
-
-	rbKey := client.ObjectKey{Namespace: namespace, Name: installerRoleBindingName}
-	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		rb := &rbacv1.RoleBinding{}
-		if err := r.reader().Get(ctx, rbKey, rb); err != nil {
-			return err
-		}
-		if !controllerutil.RemoveFinalizer(rb, installerFinalizer) {
-			return nil
-		}
-		return r.Update(ctx, rb, client.FieldOwner(r.ControllerID))
-	})
-	if client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("failed to release the installer RoleBinding's finalizer in %q: %w", namespace, err)
 	}
 
 	var errs []error
