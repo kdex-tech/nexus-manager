@@ -188,8 +188,15 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		// Update conditions carefully - if helm failed in the cluster, don't overwrite it with something else
 		currentHelmStatus := latestHost.Status.Attributes[AttributeHelmReleaseStatus]
 		if currentHelmStatus == HelmStatusFailed {
-			if meta.IsStatusConditionTrue(latestHost.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded)) {
-				// Helm failed in cluster, ensure our memory copy reflects this to avoid overwriting
+			if degraded := meta.FindStatusCondition(latestHost.Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded)); degraded != nil && degraded.Status == metav1.ConditionTrue {
+				// Helm failed in cluster, ensure our memory copy reflects this
+				// to avoid overwriting. The reason, like the helm.release.
+				// attributes, is the helm run's: it says why the run failed
+				// (setHelmOutcome), e.g. a refused chart.
+				reason := kdexv1alpha1.ConditionReason(degraded.Reason)
+				if reason == "" {
+					reason = kdexv1alpha1.ConditionReasonReconcileError
+				}
 				kdexv1alpha1.SetConditions(
 					&host.Status.Conditions,
 					kdexv1alpha1.ConditionStatuses{
@@ -197,7 +204,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 						Degraded:    metav1.ConditionTrue,
 						Ready:       metav1.ConditionFalse,
 					},
-					kdexv1alpha1.ConditionReasonReconcileError,
+					reason,
 					latestHost.Status.Attributes[AttributeHelmReleaseError],
 				)
 			}

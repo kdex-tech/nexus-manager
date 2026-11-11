@@ -4,8 +4,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -210,5 +212,63 @@ func TestReconcile_HealsTheSubjectWithoutAHelmRun(t *testing.T) {
 
 	if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != "my-host" {
 		t.Errorf("subjects = %v, want ns/my-host restored by Reconcile", subs)
+	}
+}
+
+// A refused run's typed reason is what the host shows: the reconcile's status
+// patch carries the helm run's failure forward without rewriting its reason.
+func TestReconcile_KeepsTheHelmRunsRefusalReason(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		helm   *kdexv1alpha1.HelmConfig
+		reason kdexv1alpha1.ConditionReason
+	}{
+		{"unsupported host-manager chart",
+			&kdexv1alpha1.HelmConfig{HostManager: &kdexv1alpha1.HostManagerHelmConfig{Version: "0.32.0"}},
+			ConditionReasonHostManagerChartUnsupported},
+		{"refused companion",
+			&kdexv1alpha1.HelmConfig{CompanionCharts: []kdexv1alpha1.CompanionChart{{Name: "bad", Chart: "file:///x"}}},
+			ConditionReasonCompanionChartRefused},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			host := helmHost("my-host")
+			host.Finalizers = []string{hostFinalizerName}
+			host.Spec.Helm = tt.helm
+			r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+			// Long enough that the second pass finds the failed run in backoff.
+			r.RequeueDelay = time.Hour
+			key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
+			tr := &kdexv1alpha1.KDexClusterTranslation{ObjectMeta: metav1.ObjectMeta{Name: "kdex-default-translation"}}
+			kdexv1alpha1.SetConditions(&tr.Status.Conditions, kdexv1alpha1.ConditionStatuses{Ready: metav1.ConditionTrue},
+				kdexv1alpha1.ConditionReasonReconcileSuccess, "ready")
+			if err := fc.Create(t.Context(), tr); err != nil {
+				t.Fatal(err)
+			}
+
+			// The first pass starts the run, which is refused.
+			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			awaitNoHelmRun(t, r, key)
+			if s := getHost(t, fc, "my-host").Status.Attributes[AttributeHelmReleaseStatus]; s != HelmStatusFailed {
+				t.Fatalf("helm status = %q, want %q", s, HelmStatusFailed)
+			}
+			// The second finds it failed and in backoff, and patches the
+			// status around it.
+			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			if r.helmRunInFlight(key) {
+				t.Fatal("the second pass started a run; want it in backoff")
+			}
+
+			got := getHost(t, fc, "my-host")
+			for _, c := range []kdexv1alpha1.ConditionType{kdexv1alpha1.ConditionTypeDegraded, kdexv1alpha1.ConditionTypeReady} {
+				cond := meta.FindStatusCondition(got.Status.Conditions, string(c))
+				if cond == nil || cond.Reason != string(tt.reason) {
+					t.Errorf("%s condition = %+v, want reason %q", c, cond, tt.reason)
+				}
+			}
+		})
 	}
 }
