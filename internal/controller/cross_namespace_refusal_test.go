@@ -138,3 +138,28 @@ func TestHostManagerValues_ReferenceNamespacesDisabled(t *testing.T) {
 		t.Error("condition not cleared when the list is empty")
 	}
 }
+
+func TestResolveSecret_ClusterScopedReferrerUsesOperatorPath(t *testing.T) {
+	existing := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "npm", Namespace: "kcnas-system"}}
+	c := crossNamespaceClient(t, existing)
+	referrer := &kdexv1alpha1.KDexClusterApp{ObjectMeta: metav1.ObjectMeta{Name: "app"}}
+	ref := &kdexv1alpha1.KDexObjectReference{Kind: "Secret", Name: "npm", Namespace: "kcnas-system"}
+
+	var conds []metav1.Condition
+	secret, shouldReturn, _, err := ResolveSecret(context.Background(), c, referrer, &conds, ref, time.Second)
+	if err != nil || shouldReturn || secret == nil || secret.Name != "npm" {
+		t.Fatalf("got secret=%v shouldReturn=%v err=%v", secret, shouldReturn, err)
+	}
+}
+
+func TestResolveKDexObjectReference_ClusterScopedReferrerToNamespacedKindErrors(t *testing.T) {
+	c := crossNamespaceClient(t)
+	referrer := &kdexv1alpha1.KDexClusterApp{ObjectMeta: metav1.ObjectMeta{Name: "app"}}
+	ref := &kdexv1alpha1.KDexObjectReference{Kind: "KDexTheme", Name: "t", Namespace: "b"}
+
+	var conds []metav1.Condition
+	_, shouldReturn, _, err := ResolveKDexObjectReference(context.Background(), c, referrer, &conds, ref, time.Second)
+	if err == nil || !shouldReturn || errors.Is(err, errCrossNamespaceReference) || c.gets != 0 {
+		t.Fatalf("shouldReturn=%v err=%v gets=%d", shouldReturn, err, c.gets)
+	}
+}

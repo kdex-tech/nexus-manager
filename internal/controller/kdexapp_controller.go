@@ -124,14 +124,7 @@ func (r *KDexAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// DefaultNpmRegistry. Resources with their own secretRef are unaffected.
 	// The default is the operator's own configuration, so it is resolved
 	// without the tenant namespace rule.
-	var secret *corev1.Secret
-	var shouldReturn bool
-	var r1 ctrl.Result
-	if spec.PackageReference.SecretRef != nil {
-		secret, shouldReturn, r1, err = ResolveSecret(ctx, r.Client, o, &status.Conditions, spec.PackageReference.SecretRef, r.RequeueDelay)
-	} else {
-		secret, shouldReturn, r1, err = ResolveOperatorSecret(ctx, r.Client, o, &status.Conditions, r.Configuration.DefaultNpmSecretRef, r.RequeueDelay)
-	}
+	secret, shouldReturn, r1, err := resolvePackageSecret(ctx, r.Client, o, &status.Conditions, spec.PackageReference.SecretRef, r.Configuration.DefaultNpmSecretRef, r.RequeueDelay)
 	if shouldReturn {
 		return r1, err
 	}

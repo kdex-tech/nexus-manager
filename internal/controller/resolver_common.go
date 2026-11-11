@@ -368,6 +368,13 @@ func ResolveSecret(
 			Namespace: object.GetNamespace(),
 		}
 	case *kdexv1alpha1.KDexObjectReference:
+		// A cluster-scoped referrer (namespace "") is written only by the
+		// trusted operator, so its secretRef is operator-authored and takes the
+		// operator path with no namespace rule (the webhooks require
+		// secretRef.namespace on cluster-scoped resources).
+		if object.GetNamespace() == "" {
+			return ResolveOperatorSecret(ctx, c, object, objectConditions, v, requeueDelay)
+		}
 		if isOtherNamespace(object, v.Namespace) {
 			return nil, true, ctrl.Result{}, refuseCrossNamespace(objectConditions)
 		}
@@ -380,6 +387,23 @@ func ResolveSecret(
 	}
 
 	return getSecret(ctx, c, objectConditions, secretName, requeueDelay)
+}
+
+// resolvePackageSecret resolves a package reference's credential: its own
+// secretRef (tenant rules apply) or, absent that, the operator's default.
+func resolvePackageSecret(
+	ctx context.Context,
+	c client.Client,
+	object client.Object,
+	conds *[]metav1.Condition,
+	own, operatorDefault *kdexv1alpha1.KDexObjectReference,
+	requeueDelay time.Duration,
+) (*corev1.Secret, bool, ctrl.Result, error) {
+	if own != nil {
+		return ResolveSecret(ctx, c, object, conds, own, requeueDelay)
+	}
+
+	return ResolveOperatorSecret(ctx, c, object, conds, operatorDefault, requeueDelay)
 }
 
 // ResolveOperatorSecret resolves a Secret named by the operator's own
