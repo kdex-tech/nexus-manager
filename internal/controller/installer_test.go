@@ -18,6 +18,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 var (
@@ -171,6 +172,38 @@ func TestEnsureInstaller_HealsAnExistingBinding(t *testing.T) {
 	assertInstallerPresent(t, fc)
 }
 
+// The label-selected cache can still hold an installer RoleBinding deleted
+// since: the update it leads to meets NotFound, and the binding is created
+// anew rather than failing the run.
+func TestEnsureInstaller_RecreatesAnObjectTheCacheStillHolds(t *testing.T) {
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+	ctx := context.Background()
+	staleBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns", ResourceVersion: "999"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
+	}
+	var staleReads int
+	r.APIReader = fc
+	r.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if rb, ok := obj.(*rbacv1.RoleBinding); ok && key == installerRBKey {
+				staleReads++
+				staleBinding.DeepCopyInto(rb)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	if err := r.ensureInstaller(ctx, "ns"); err != nil {
+		t.Fatalf("ensureInstaller over a stale cached binding: %v", err)
+	}
+	if staleReads == 0 {
+		t.Fatal("the stale cached binding was never read")
+	}
+	assertInstallerPresent(t, fc)
+}
+
 // roleRef is immutable: a binding of the installer's name to another role is
 // refused, not repurposed.
 func TestEnsureInstaller_RefusesABindingToAnotherRole(t *testing.T) {
@@ -247,9 +280,9 @@ func TestReleaseInstaller_TerminatingSiblingDoesNotKeepIt(t *testing.T) {
 	assertInstallerGone(t, fc)
 }
 
-// teardownHost is a host with a finalizer, an installed host-manager release
+// newTeardownFixture is a host with a finalizer, an installed host-manager release
 // and a recorded cluster-reader grant, in a namespace with an installer.
-func teardownHost(t *testing.T) (*KDexHostReconciler, client.Client, *uninstallCountingHelmClient, *identityRecordingFactory) {
+func newTeardownFixture(t *testing.T) (*KDexHostReconciler, client.Client, *uninstallCountingHelmClient, *identityRecordingFactory) {
 	t.Helper()
 	host := helmHost("my-host")
 	host.Finalizers = []string{hostFinalizerName}
@@ -269,7 +302,7 @@ func teardownHost(t *testing.T) (*KDexHostReconciler, client.Client, *uninstallC
 }
 
 func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
-	r, fc, mock, _ := teardownHost(t)
+	r, fc, mock, _ := newTeardownFixture(t)
 	terminateNamespace(t, fc, "ns")
 	deleteHost(t, fc, "my-host")
 
@@ -291,8 +324,19 @@ func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
 }
 
 func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
-	r, fc, mock, factory := teardownHost(t)
+	r, fc, mock, factory := newTeardownFixture(t)
 	deleteHost(t, fc, "my-host")
+	// One pass makes one decision about the namespace: the installer
+	// bootstrap reuses it rather than reading the namespace again.
+	var namespaceReads int
+	r.APIReader = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Namespace); ok {
+				namespaceReads++
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
 
 	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
@@ -312,6 +356,9 @@ func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
 		t.Errorf("host get = %v, want it finalized", err)
 	}
 	assertInstallerGone(t, fc)
+	if namespaceReads != 1 {
+		t.Errorf("teardown read the namespace %d times, want once", namespaceReads)
+	}
 }
 
 // A host deleted before any helm run bootstrapped the installer (or after a

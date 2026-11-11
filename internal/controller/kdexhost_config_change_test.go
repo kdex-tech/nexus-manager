@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -26,9 +24,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
-				return mockHelmClient, nil
-			}
+			setSuiteHelmClient(mockHelmClient)
 
 			// Create a unique namespace for each test
 			testNamespace = fmt.Sprintf("test-config-%d", time.Now().UnixNano())
@@ -43,6 +39,8 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 		AfterEach(func() {
 			// Restore original configuration defaults if needed
 			// (Assuming the test suite might rely on defaults)
+
+			setSuiteHelmClient(nil)
 
 			// Delete the namespace
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}

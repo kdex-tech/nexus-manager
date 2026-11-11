@@ -82,7 +82,14 @@ func (r *KDexHostReconciler) ensureInstaller(ctx context.Context, namespace stri
 	if terminating {
 		return fmt.Errorf("cannot bootstrap the installer in %q: %w", namespace, errNamespaceTerminating)
 	}
+	return r.ensureInstallerObjects(ctx, namespace)
+}
 
+// ensureInstallerObjects is ensureInstaller for a caller that has already
+// found the namespace not terminating: one pass makes one decision, so a
+// namespace that starts terminating after it fails the creates, and the next
+// pass sees it terminating.
+func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespace string) error {
 	saKey := client.ObjectKey{Namespace: namespace, Name: utils.InstallerServiceAccountName}
 	if err := ensureOwned(ctx, r, saKey, func() *corev1.ServiceAccount { return &corev1.ServiceAccount{} },
 		func(sa *corev1.ServiceAccount) (bool, error) {
@@ -148,34 +155,44 @@ func ensureLabels(obj client.Object) bool {
 // The cached read is label-selected (CacheOptions), so an object that exists
 // without the label is invisible to it: a create that meets one, or an update
 // that meets a newer version, re-reads it live -- into a fresh object, so
-// nothing from the failed attempt survives the decode -- and adopts it.
+// nothing from the failed attempt survives the decode -- and adopts it. An
+// update that finds the cached object deleted since creates it anew.
 func ensureOwned[T client.Object](ctx context.Context, r *KDexHostReconciler, key client.ObjectKey, newObj func() T, mutate func(T) (bool, error)) error {
 	obj := newObj()
 	err := r.Get(ctx, key, obj)
-	switch {
-	case apierrors.IsNotFound(err):
-		obj = newObj()
-		obj.SetName(key.Name)
-		obj.SetNamespace(key.Namespace)
-		if _, err := mutate(obj); err != nil {
-			return err
-		}
-		err = r.Create(ctx, obj, client.FieldOwner(r.ControllerID))
-		if !apierrors.IsAlreadyExists(err) {
-			return err
-		}
-	case err == nil:
+	if err == nil {
 		changed, err := mutate(obj)
 		if err != nil || !changed {
 			return err
 		}
 		err = r.Update(ctx, obj, client.FieldOwner(r.ControllerID))
-		if !apierrors.IsConflict(err) {
+		switch {
+		case apierrors.IsConflict(err):
+			return ensureOwnedLive(ctx, r, key, newObj, mutate)
+		case !apierrors.IsNotFound(err):
 			return err
 		}
-	default:
+		// The cache still held an object deleted since: create it anew.
+	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
+
+	obj = newObj()
+	obj.SetName(key.Name)
+	obj.SetNamespace(key.Namespace)
+	if _, err := mutate(obj); err != nil {
+		return err
+	}
+	err = r.Create(ctx, obj, client.FieldOwner(r.ControllerID))
+	if !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return ensureOwnedLive(ctx, r, key, newObj, mutate)
+}
+
+// ensureOwnedLive is ensureOwned's fallback when the cache missed the object
+// or was stale: it reads live and updates, retrying on conflict.
+func ensureOwnedLive[T client.Object](ctx context.Context, r *KDexHostReconciler, key client.ObjectKey, newObj func() T, mutate func(T) (bool, error)) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		live := newObj()
 		if err := r.reader().Get(ctx, key, live); err != nil {
@@ -261,8 +278,8 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 }
 
 // uninstallHostReleases uninstalls the host-manager release and every
-// companion the host owns, impersonating the namespace's installer. It
-// bootstraps the installer first: a host deleted before any helm run created
+// companion the host owns, impersonating the namespace's installer. Its caller
+// has found the namespace not terminating. It bootstraps the installer first: a host deleted before any helm run created
 // it, or after a sibling's teardown released it, would otherwise be refused
 // every uninstall and hold its finalizer forever.
 //
@@ -270,7 +287,7 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 // blocked release does not strand the others; retrying is safe, since
 // uninstalling a release that is already gone succeeds.
 func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) error {
-	if err := r.ensureInstaller(ctx, host.Namespace); err != nil {
+	if err := r.ensureInstallerObjects(ctx, host.Namespace); err != nil {
 		return err
 	}
 	c, err := r.getOrCreateHelmClient(host.Name, host.Namespace, secrets, log.WithName("helm"), utils.HelmAsInstaller)

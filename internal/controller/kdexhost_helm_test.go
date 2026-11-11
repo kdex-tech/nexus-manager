@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-logr/logr"
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -27,9 +25,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
-				return mockHelmClient, nil
-			}
+			setSuiteHelmClient(mockHelmClient)
 
 			// Create a unique namespace for each test
 			testNamespace = fmt.Sprintf("test-helm-%d", time.Now().UnixNano())
@@ -46,10 +42,8 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 		AfterEach(func() {
 			cleanupResources(testNamespace)
-			// Reset factory to avoid leaking mock to other tests
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
-				return &MockHelmClient{}, nil
-			}
+			// Reset the client to avoid leaking the mock to other tests
+			setSuiteHelmClient(nil)
 			// Delete the namespace
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
 			_ = k8sClient.Delete(ctx, ns)

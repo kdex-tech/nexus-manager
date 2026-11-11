@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -69,6 +70,34 @@ var (
 	hostReconciler  *KDexHostReconciler
 	mgrStopped      chan struct{}
 )
+
+// suiteHelm is the Helm client the shared envtest reconciler's factory hands
+// out. The factory is installed once, at suite setup, and never reassigned:
+// helm run goroutines from earlier specs read it at any time, so a spec that
+// assigned the field would race them. Specs swap the client instead, through
+// setSuiteHelmClient, under the lock the factory reads it with.
+var suiteHelm struct {
+	mu     sync.Mutex
+	client utils.HelmClientInterface
+}
+
+// setSuiteHelmClient makes the shared reconciler's Helm clients c; nil
+// restores the default, a fresh MockHelmClient per client.
+func setSuiteHelmClient(c utils.HelmClientInterface) {
+	suiteHelm.mu.Lock()
+	defer suiteHelm.mu.Unlock()
+	suiteHelm.client = c
+}
+
+// suiteHelmClientFactory is the shared reconciler's HelmClientFactory.
+func suiteHelmClientFactory(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
+	suiteHelm.mu.Lock()
+	defer suiteHelm.mu.Unlock()
+	if suiteHelm.client == nil {
+		return &MockHelmClient{}, nil
+	}
+	return suiteHelm.client, nil
+}
 
 type MockRegistry struct{}
 
@@ -218,16 +247,14 @@ var _ = BeforeSuite(func() {
 
 	// Host
 	hostReconciler = &KDexHostReconciler{
-		Client:        k8sManager.GetClient(),
-		APIReader:     k8sManager.GetAPIReader(),
-		ControllerID:  "test-controller",
-		Ctx:           ctx,
-		Configuration: configuration,
-		RequeueDelay:  0,
-		Scheme:        k8sManager.GetScheme(),
-		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
-			return &MockHelmClient{}, nil
-		},
+		Client:            k8sManager.GetClient(),
+		APIReader:         k8sManager.GetAPIReader(),
+		ControllerID:      "test-controller",
+		Ctx:               ctx,
+		Configuration:     configuration,
+		RequeueDelay:      0,
+		Scheme:            k8sManager.GetScheme(),
+		HelmClientFactory: suiteHelmClientFactory,
 	}
 	err = hostReconciler.SetupWithManager(k8sManager)
 	Expect(err).NotTo(HaveOccurred())
