@@ -9,5 +9,4 @@ aggregationRule:
   clusterRoleSelectors:
   - matchLabels:
       kdex.dev/aggregate-to-installer: "true"
-rules: []
 {{- end -}}

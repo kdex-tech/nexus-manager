@@ -100,10 +100,15 @@ func TestChartRBACMatchesConfig(t *testing.T) {
 		if got.Kind != want.Kind {
 			t.Errorf("%s: chart kind %q != config kind %q", name, got.Kind, want.Kind)
 		}
-		for what, pair := range map[string][2]any{
-			"rules":           {got.Rules, want.Rules},
+		pairs := map[string][2]any{
 			"aggregationRule": {got.AggregationRule, want.AggregationRule},
-		} {
+		}
+		// An aggregated role's rules are the aggregation controller's, and
+		// neither file declares them (TestAggregatedRolesDeclareNoRules).
+		if want.AggregationRule == nil {
+			pairs["rules"] = [2]any{got.Rules, want.Rules}
+		}
+		for what, pair := range pairs {
 			g, gerr := yaml.Marshal(pair[0])
 			w, werr := yaml.Marshal(pair[1])
 			if gerr != nil || werr != nil {
@@ -143,6 +148,42 @@ func TestClusterReaderBindingDeclaresNoSubjects(t *testing.T) {
 		}
 		if regexp.MustCompile(`(?m)^subjects:`).Match(b) {
 			t.Errorf("%s declares subjects", f)
+		}
+	}
+}
+
+// The clusterrole-aggregation-controller owns an aggregated role's rules. Helm
+// v4 applies server-side, so a declared rules key -- even an empty one -- is a
+// field the chart claims too, and every upgrade after the first conflicts with
+// the controller over it.
+func TestAggregatedRolesDeclareNoRules(t *testing.T) {
+	var aggregated []string
+	for _, dir := range []string{"config/rbac", "config/rbac/fixed", "chart/templates/rbac"} {
+		files, err := filepath.Glob(filepath.Join(repoRoot, dir, "*.yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var o map[string]any
+			if err := yaml.Unmarshal([]byte(stripTemplating(string(b))), &o); err != nil {
+				t.Fatalf("parse %s: %v", f, err)
+			}
+			if _, ok := o["aggregationRule"]; !ok {
+				continue
+			}
+			aggregated = append(aggregated, f)
+			if _, ok := o["rules"]; ok {
+				t.Errorf("%s: an aggregated role declares rules", f)
+			}
+		}
+	}
+	for _, want := range []string{"config/rbac/fixed/installer_role.yaml", "chart/templates/rbac/installer_role.yaml"} {
+		if !slices.Contains(aggregated, filepath.Join(repoRoot, want)) {
+			t.Errorf("%s is not an aggregated role (found %v)", want, aggregated)
 		}
 	}
 }
