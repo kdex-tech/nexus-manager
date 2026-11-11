@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 func TestCheckHostManagerChartVersion(t *testing.T) {
@@ -15,10 +17,22 @@ func TestCheckHostManagerChartVersion(t *testing.T) {
 			t.Errorf("%q: unexpected error %v", v, err)
 		}
 	}
-	for _, v := range []string{"0.32.0", "0.32.9", "", "^0.33", "latest", "0.33"} {
+	for _, v := range []string{"0.32.0", "0.32.9", "^0.33", "latest", "0.33"} {
 		if err := checkHostManagerChartVersion(v); err == nil {
 			t.Errorf("%q: want an error", v)
 		}
+	}
+}
+
+// The shipped default leaves the version empty (Helm resolves the latest), and
+// the pre-run check must not refuse it.
+func TestCheckHostManagerChart_DefaultConfigurationAccepted(t *testing.T) {
+	if err := checkHostManagerChartVersion(""); err != nil {
+		t.Errorf("empty version: %v", err)
+	}
+	r := hashReconciler(t)
+	if err := r.checkHostManagerChart(baseHost()); err != nil {
+		t.Errorf("default configuration refused: %v", err)
 	}
 }
 
@@ -103,29 +117,98 @@ func TestHelmRun_UnsupportedChartVersionRefused(t *testing.T) {
 	}
 }
 
-// A host whose chart is installed gets its subject on every reconcile, even
-// when the release-hash gate would skip the run; a host that never installed
-// gets none.
-func TestHealClusterReaderSubject(t *testing.T) {
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+func hostWithRecordedSA(sa, status string) *kdexv1alpha1.KDexHost {
 	host := helmHost("my-host")
-	host.Namespace = "ns"
-	ctx := t.Context()
-
-	if err := r.healClusterReaderSubject(ctx, host); err != nil {
-		t.Fatal(err)
+	host.Finalizers = []string{hostFinalizerName}
+	host.Status.Attributes = map[string]string{}
+	if sa != "" {
+		host.Status.Attributes[AttributeHostManagerServiceAccount] = sa
 	}
-	if subs := readClusterReaderSubjects(t, fc); len(subs) != 0 {
-		t.Fatalf("never-installed host got subjects %v", subs)
+	if status != "" {
+		host.Status.Attributes[AttributeHelmReleaseStatus] = status
 	}
+	return host
+}
 
-	host.Status.Attributes = map[string]string{AttributeHelmReleaseStatus: HelmStatusCompleted}
-	for range 2 {
-		if err := r.healClusterReaderSubject(ctx, host); err != nil {
+// The heal keys on the recorded grant, not on the run's status: an installed
+// host-manager keeps running while its run is Failed or InProgress.
+func TestHealClusterReaderSubject(t *testing.T) {
+	for _, status := range []string{HelmStatusCompleted, HelmStatusFailed, HelmStatusInProgress} {
+		t.Run(status, func(t *testing.T) {
+			r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+			host := hostWithRecordedSA("my-host", status)
+			host.Namespace = "ns"
+			for range 2 {
+				if err := r.healClusterReaderSubject(t.Context(), host); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != "my-host" {
+				t.Errorf("subjects = %v, want ns/my-host once", subs)
+			}
+		})
+	}
+	t.Run("no record", func(t *testing.T) {
+		r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+		host := hostWithRecordedSA("", HelmStatusCompleted)
+		host.Namespace = "ns"
+		if err := r.healClusterReaderSubject(t.Context(), host); err != nil {
 			t.Fatal(err)
 		}
+		if subs := readClusterReaderSubjects(t, fc); len(subs) != 0 {
+			t.Errorf("host with no recorded grant got subjects %v", subs)
+		}
+	})
+}
+
+// Renaming the ServiceAccount swaps the subject only once the install that
+// renders the new one has succeeded.
+func TestHelmRun_ServiceAccountRenameSwapsTheSubjectAfterInstall(t *testing.T) {
+	host := helmHost("my-host")
+	host.Status.Attributes = map[string]string{AttributeHostManagerServiceAccount: "old"}
+	host.Spec.Helm = &kdexv1alpha1.HelmConfig{HostManager: &kdexv1alpha1.HostManagerHelmConfig{
+		Values: `{"serviceAccount":{"create":false,"name":"new"}}`,
+	}}
+	mock := NewMockHelmClient(nil)
+	mock.failInstall, mock.failMessage = true, "install failed"
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	if err := r.ensureClusterReaderSubject(t.Context(), "ns", "old"); err != nil {
+		t.Fatal(err)
 	}
+
+	r.runAsyncHelmReconcile(t.Context(), "ns", "my-host", "hash", nil, discardLogger())
+	if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != "old" {
+		t.Fatalf("after a failed install subjects = %v, want only old", subs)
+	}
+
+	mock.failInstall = false
+	r.runAsyncHelmReconcile(t.Context(), "ns", "my-host", "hash2", nil, discardLogger())
+	subs := readClusterReaderSubjects(t, fc)
+	if len(subs) != 1 || subs[0].Name != "new" {
+		t.Fatalf("after the install subjects = %v, want only new", subs)
+	}
+	if got := recordedHostManagerServiceAccount(getHost(t, fc, "my-host")); got != "new" {
+		t.Errorf("recorded SA = %q, want new", got)
+	}
+}
+
+// Reconcile heals the subject even when the helm hash matches and no run
+// starts.
+func TestReconcile_HealsTheSubjectWithoutAHelmRun(t *testing.T) {
+	host := hostWithRecordedSA("my-host", HelmStatusCompleted)
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	hash, err := r.computeHelmReleaseHash(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.Status.Attributes[AttributeHelmReleaseHash] = hash
+	if err := fc.Status().Update(t.Context(), host); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "my-host"}})
+
 	if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != "my-host" {
-		t.Errorf("subjects = %v, want ns/my-host once", subs)
+		t.Errorf("subjects = %v, want ns/my-host restored by Reconcile", subs)
 	}
 }

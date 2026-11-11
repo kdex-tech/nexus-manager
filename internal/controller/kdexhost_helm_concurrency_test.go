@@ -96,7 +96,7 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         supportedChartConfiguration(scheme),
+		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: limit,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
@@ -215,7 +215,7 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         supportedChartConfiguration(scheme),
+		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
@@ -247,12 +247,4 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		t.Error("no render overlapped a prune: the render slot is being held across the prune, " +
 			"so one stuck uninstall stalls the whole fleet")
 	}
-}
-
-// supportedChartConfiguration is the default configuration with a host-manager
-// chart version the operator will install.
-func supportedChartConfiguration(scheme *runtime.Scheme) configuration.NexusConfiguration {
-	c := configuration.LoadConfiguration("/nonexistent-config.yaml", scheme)
-	c.HostDefault.Chart.Version = MinHostManagerChartVersion
-	return c
 }

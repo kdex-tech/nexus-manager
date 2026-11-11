@@ -44,14 +44,11 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	fc := b.Build()
-	config := configuration.LoadConfiguration("/nonexistent-config.yaml", scheme)
-	// Hosts install only a supported host-manager chart.
-	config.HostDefault.Chart.Version = MinHostManagerChartVersion
 	return &KDexHostReconciler{
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         config,
+		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {

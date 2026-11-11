@@ -57,6 +57,11 @@ const (
 	// so a companion dropped from the spec before that is orphaned, and only
 	// logged as unrecorded.
 	AttributeCompanionReleases = helmAttributePrefix + "companions"
+	// AttributeHostManagerServiceAccount records the ServiceAccount this
+	// operator last granted cluster-reader access for the host's host-manager
+	// release, set only after a successful install. It, not the current spec,
+	// is what the heal re-adds and what teardown removes.
+	AttributeHostManagerServiceAccount = helmAttributePrefix + "serviceaccount"
 
 	HelmStatusInProgress = "in_progress"
 	HelmStatusCompleted  = "completed"
@@ -918,7 +923,7 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(ctx context.Context, helm
 
 	// The chart now exists, and with it the ServiceAccount host-manager runs
 	// as: let it read cluster-scoped objects.
-	return r.ensureClusterReaderSubject(ctx, host.Namespace, hostManagerServiceAccountName(spec.Values, host.Name))
+	return r.grantHostManagerServiceAccount(ctx, host, hostManagerServiceAccountName(spec.Values, host.Name))
 }
 
 // checkHostManagerChart refuses a host whose effective host-manager chart

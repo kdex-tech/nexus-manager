@@ -199,8 +199,6 @@ var _ = BeforeSuite(func() {
 
 	configuration := configuration.LoadConfiguration("/config.yaml", scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
-	// Hosts install only a supported host-manager chart.
-	configuration.HostDefault.Chart.Version = MinHostManagerChartVersion
 
 	// The nexus chart ships the cluster-reader binding without subjects.
 	Expect(k8sClient.Create(ctx, &rbacv1.ClusterRoleBinding{

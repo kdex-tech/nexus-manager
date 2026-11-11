@@ -34,10 +34,15 @@ type hostManagerChartUnsupportedError struct{ msg string }
 
 func (e *hostManagerChartUnsupportedError) Error() string { return e.msg }
 
-// checkHostManagerChartVersion refuses any version that is not strict semver
-// at or above MinHostManagerChartVersion (ranges and tags such as "^0.33" or
-// "latest" included: the floor cannot be verified for them).
+// checkHostManagerChartVersion refuses any explicit pin that is not strict
+// semver at or above MinHostManagerChartVersion (ranges and tags such as
+// "^0.33" or "latest" included: the floor cannot be verified for them). An
+// empty version is accepted: the shipped default leaves it empty and Helm
+// resolves the registry's latest chart.
 func checkHostManagerChartVersion(version string) error {
+	if version == "" {
+		return nil
+	}
 	v, err := semver.StrictNewVersion(version)
 	if err != nil {
 		return &hostManagerChartUnsupportedError{fmt.Sprintf("host-manager chart version %q is not an exact semantic version; at least %s is required", version, MinHostManagerChartVersion)}
@@ -100,7 +105,7 @@ func (r *KDexHostReconciler) removeClusterReaderSubject(ctx context.Context, nam
 // starts.
 func (r *KDexHostReconciler) updateClusterReaderSubjects(ctx context.Context, modify func([]rbacv1.Subject) ([]rbacv1.Subject, bool)) error {
 	key := types.NamespacedName{Name: clusterReaderBindingName}
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		binding := &rbacv1.ClusterRoleBinding{}
 		if err := r.reader().Get(ctx, key, binding); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -117,18 +122,55 @@ func (r *KDexHostReconciler) updateClusterReaderSubjects(ctx context.Context, mo
 	})
 }
 
-// healClusterReaderSubject re-adds a host's host-manager ServiceAccount to the
-// cluster-reader binding on every reconcile, outside the release-hash gate, so
-// the subject self-heals if anything resets the binding. Only a host whose
-// host-manager release has been installed has such an ServiceAccount. A
-// failure is logged, not fatal: the next reconcile retries it.
-func (r *KDexHostReconciler) healClusterReaderSubject(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
-	if host.Status.Attributes[AttributeHelmReleaseStatus] != HelmStatusCompleted {
-		return nil
+// recordedHostManagerServiceAccount is the ServiceAccount last granted
+// cluster-reader access for the host ("" when none was). Teardown removes
+// exactly this subject, never one recomputed from the spec.
+func recordedHostManagerServiceAccount(host *kdexv1alpha1.KDexHost) string {
+	return host.Status.Attributes[AttributeHostManagerServiceAccount]
+}
+
+// grantHostManagerServiceAccount runs after a successful host-manager install:
+// it adds sa to the cluster-reader binding, removes the previously recorded
+// ServiceAccount if the name changed, and only then records sa. The record
+// moves last so a failure part-way is redone by the next run.
+func (r *KDexHostReconciler) grantHostManagerServiceAccount(ctx context.Context, host *kdexv1alpha1.KDexHost, sa string) error {
+	if err := r.ensureClusterReaderSubject(ctx, host.Namespace, sa); err != nil {
+		return err
 	}
-	spec, err := r.buildHostManagerChartSpec(host)
+	key := client.ObjectKeyFromObject(host)
+	var previous string
+	_, err := r.patchHostStatus(ctx, key, func(h *kdexv1alpha1.KDexHost) bool {
+		previous = recordedHostManagerServiceAccount(h)
+		return false
+	})
 	if err != nil {
 		return err
 	}
-	return r.ensureClusterReaderSubject(ctx, host.Namespace, hostManagerServiceAccountName(spec.Values, host.Name))
+	if previous == sa {
+		return nil
+	}
+	if previous != "" {
+		if err := r.removeClusterReaderSubject(ctx, host.Namespace, previous); err != nil {
+			return err
+		}
+	}
+	_, err = r.patchHostStatus(ctx, key, func(h *kdexv1alpha1.KDexHost) bool {
+		h.Status.Attributes[AttributeHostManagerServiceAccount] = sa
+		return true
+	})
+	return err
+}
+
+// healClusterReaderSubject re-adds the recorded host-manager ServiceAccount to
+// the cluster-reader binding on every reconcile, outside the release-hash gate
+// and regardless of the run's status: an installed host-manager keeps running
+// while its run is Failed or InProgress, and must not lose its reads if the
+// binding is reset. A failure is logged by the caller, not fatal: the next
+// reconcile retries it.
+func (r *KDexHostReconciler) healClusterReaderSubject(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
+	sa := recordedHostManagerServiceAccount(host)
+	if sa == "" {
+		return nil
+	}
+	return r.ensureClusterReaderSubject(ctx, host.Namespace, sa)
 }
