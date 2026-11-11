@@ -67,10 +67,13 @@ func chartRoleBinding(host, ns string) *rbacv1.RoleBinding {
 }
 
 // rolledOutDeployment is the host-manager Deployment the redesigned chart
-// renders, fully rolled out.
+// renders, running as ServiceAccount/<host>, fully rolled out.
 func rolledOutDeployment(host, ns string) *appsv1.Deployment {
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: host, Namespace: ns, Generation: 2},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{ServiceAccountName: host},
+		}},
 		Status: appsv1.DeploymentStatus{
 			ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1,
 		},
@@ -78,10 +81,30 @@ func rolledOutDeployment(host, ns string) *appsv1.Deployment {
 }
 
 // upgraded makes the cluster hold what proves the redesigned chart replaced
-// the legacy grant: its RoleBinding and its rolled-out Deployment.
-func upgraded(t *testing.T, c client.Client, host, ns string) {
+// the legacy grant: its RoleBinding, its rolled-out Deployment, its release
+// deployed, and the Deployment's ServiceAccount granted cluster reads.
+func upgraded(t *testing.T, c client.Client, mock *MockHelmClient, host, ns string) {
 	t.Helper()
 	createObjects(t, c, chartRoleBinding(host, ns), rolledOutDeployment(host, ns))
+	mock.addRelease(host)
+	grantClusterReader(t, c, ns, host)
+}
+
+// grantClusterReader adds ServiceAccount ns/sa to the cluster-reader binding.
+func grantClusterReader(t *testing.T, c client.Client, ns, sa string) {
+	t.Helper()
+	b := &rbacv1.ClusterRoleBinding{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: clusterReaderBindingName}, b); err != nil {
+		t.Fatal(err)
+	}
+	subject := rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: ns}
+	if slices.Contains(b.Subjects, subject) {
+		return
+	}
+	b.Subjects = append(b.Subjects, subject)
+	if err := c.Update(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // legacyRecord is what a never-upgraded host-manager release's record lists.
@@ -145,7 +168,7 @@ func TestCleanupLegacy_WaitsForNewRoleBinding(t *testing.T) {
 	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
 	createObjects(t, fc, role, binding)
 
-	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertExists(t, fc, role)
@@ -172,13 +195,14 @@ func TestCleanupLegacy_DeletesAfterUpgrade(t *testing.T) {
 			return c.Delete(ctx, obj, opts...)
 		},
 	}
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), funcs, host)
+	mock := NewMockHelmClient(nil)
+	r, fc := newHelmReconciler(t, mock, funcs, host)
 	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
 	createObjects(t, fc, role, binding)
 	ctx := context.Background()
 
 	// Before the upgrade the condition is raised ...
-	if _, err := r.cleanupLegacyRBAC(ctx, host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(ctx, host, nil); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	if !meta.IsStatusConditionTrue(host.Status.Conditions, "LegacyRBACPresent") {
@@ -186,8 +210,8 @@ func TestCleanupLegacy_DeletesAfterUpgrade(t *testing.T) {
 	}
 
 	// ... and the rolled-out upgrade lets the cleanup go ahead.
-	upgraded(t, fc, "my-host", "ns")
-	if _, err := r.cleanupLegacyRBAC(ctx, host); err != nil {
+	upgraded(t, fc, mock, "my-host", "ns")
+	if _, err := r.cleanupLegacyRBAC(ctx, host, nil); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertDeleted(t, fc, legacyClusterRole("my-host", "ns"))
@@ -211,12 +235,13 @@ func TestCleanupLegacy_DeletesAfterUpgrade(t *testing.T) {
 // legacy objects of rsi in b, even with its own upgrade done.
 func TestCleanupLegacy_SameNameOtherNamespaceUntouched(t *testing.T) {
 	hostA, hostB := hostIn("rsi", "a"), hostIn("rsi", "b")
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, hostA, hostB)
+	mock := NewMockHelmClient(nil)
+	r, fc := newHelmReconciler(t, mock, nil, hostA, hostB)
 	role, binding := legacyClusterRole("rsi", "b"), legacyClusterRoleBinding("rsi", "b")
 	createObjects(t, fc, role, binding)
-	upgraded(t, fc, "rsi", "a")
+	upgraded(t, fc, mock, "rsi", "a")
 
-	if _, err := r.cleanupLegacyRBAC(context.Background(), hostA); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), hostA, nil); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertExists(t, fc, role)
@@ -311,7 +336,7 @@ func TestCleanupLegacy_RunsWhenHashUnchanged(t *testing.T) {
 		t.Error("LegacyRBACPresent not on the host's status before the upgrade")
 	}
 
-	upgraded(t, fc, "my-host", "ns")
+	upgraded(t, fc, mock, "my-host", "ns")
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -365,12 +390,13 @@ func TestCleanupLegacy_ProofReadFailureKeepsLegacy(t *testing.T) {
 			return c.Get(ctx, key, obj, opts...)
 		},
 	}
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), funcs, host)
+	mock := NewMockHelmClient(nil)
+	r, fc := newHelmReconciler(t, mock, funcs, host)
 	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
 	createObjects(t, fc, role, binding)
-	upgraded(t, fc, "my-host", "ns")
+	upgraded(t, fc, mock, "my-host", "ns")
 
-	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err == nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err == nil {
 		t.Error("cleanupLegacyRBAC succeeded without its proof")
 	}
 	assertExists(t, fc, role)
@@ -420,7 +446,7 @@ func TestCleanupLegacy_WaitsForRollout(t *testing.T) {
 				createObjects(t, fc, tc.deploy())
 			}
 
-			if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+			if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err != nil {
 				t.Fatalf("cleanupLegacyRBAC: %v", err)
 			}
 			assertExists(t, fc, role)
@@ -432,19 +458,132 @@ func TestCleanupLegacy_WaitsForRollout(t *testing.T) {
 	}
 }
 
+// The proof needs the release's latest revision deployed: an upgrade that
+// failed after applying the RoleBinding and the Deployment -- "failed" -- or
+// one nexus was killed in the middle of -- "pending-upgrade", which fails
+// every later upgrade, so the cluster-reader grant after it never runs --
+// has not proven host-manager can read cluster-scoped objects without the
+// legacy grant.
+func TestCleanupLegacy_ProofRequiresADeployedRelease(t *testing.T) {
+	for _, status := range []string{"failed", "pending-upgrade", "pending-install", "pending-rollback", "superseded", "uninstalling", ""} {
+		t.Run(status, func(t *testing.T) {
+			host := helmHost("my-host")
+			mock := NewMockHelmClient(nil)
+			r, fc := newHelmReconciler(t, mock, nil, host)
+			role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
+			createObjects(t, fc, role, binding)
+			upgraded(t, fc, mock, "my-host", "ns")
+			if status == "" {
+				_ = mock.Uninstall("my-host") // no release at all
+			} else {
+				mock.setStatus("my-host", status)
+			}
+
+			if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err != nil {
+				t.Fatalf("cleanupLegacyRBAC: %v", err)
+			}
+			assertExists(t, fc, role)
+			assertExists(t, fc, binding)
+			if !meta.IsStatusConditionTrue(host.Status.Conditions, "LegacyRBACPresent") {
+				t.Error("LegacyRBACPresent not True")
+			}
+		})
+	}
+}
+
+// The proof needs the cluster-reader binding, read live, to hold the
+// ServiceAccount the live Deployment runs as: the grant after an install can
+// fail, and before migration the legacy binding is host-manager's only read
+// of cluster-scoped objects.
+func TestCleanupLegacy_ProofRequiresTheDeploymentsServiceAccountGranted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		granted []string
+		runAs   string
+		deleted bool
+	}{
+		{name: "grant failed", runAs: "my-host"},
+		{name: "another ServiceAccount granted", granted: []string{"my-host"}, runAs: "custom"},
+		{name: "the Deployment's ServiceAccount granted", granted: []string{"custom"}, runAs: "custom", deleted: true},
+		{name: "default ServiceAccount", granted: []string{"default"}, runAs: "", deleted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host := helmHost("my-host")
+			mock := NewMockHelmClient(map[string]map[string]string{"my-host": nil})
+			r, fc := newHelmReconciler(t, mock, nil, host)
+			role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
+			d := rolledOutDeployment("my-host", "ns")
+			d.Spec.Template.Spec.ServiceAccountName = tc.runAs
+			createObjects(t, fc, role, binding, chartRoleBinding("my-host", "ns"), d)
+			for _, sa := range tc.granted {
+				grantClusterReader(t, fc, "ns", sa)
+			}
+
+			if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err != nil {
+				t.Fatalf("cleanupLegacyRBAC: %v", err)
+			}
+			if tc.deleted {
+				assertDeleted(t, fc, role)
+				assertDeleted(t, fc, binding)
+			} else {
+				assertExists(t, fc, role)
+				assertExists(t, fc, binding)
+			}
+		})
+	}
+}
+
+// The proof reads the Deployment live: the cache can still show the previous
+// rollout complete while the new one has barely started.
+func TestCleanupLegacy_ProofReadsTheDeploymentLive(t *testing.T) {
+	host := helmHost("my-host")
+	mock := NewMockHelmClient(nil)
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
+	createObjects(t, fc, role, binding)
+	upgraded(t, fc, mock, "my-host", "ns")
+	// Live, the rollout has just begun ...
+	live := &appsv1.Deployment{}
+	if err := fc.Get(t.Context(), client.ObjectKey{Namespace: "ns", Name: "my-host"}, live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.ObservedGeneration = 1
+	if err := fc.Status().Update(t.Context(), live); err != nil {
+		t.Fatal(err)
+	}
+	// ... while the cache still holds it rolled out.
+	r.APIReader = fc
+	r.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if d, ok := obj.(*appsv1.Deployment); ok {
+				rolledOutDeployment("my-host", "ns").DeepCopyInto(d)
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	if _, err := r.cleanupLegacyRBAC(t.Context(), host, nil); err != nil {
+		t.Fatalf("cleanupLegacyRBAC: %v", err)
+	}
+	assertExists(t, fc, role)
+	assertExists(t, fc, binding)
+}
+
 // With HOST_MANAGER_CLUSTER_ROLE set, the legacy chart rendered no
 // ClusterRole/<host>: its binding bound the shared role. The binding is the
 // release's and goes; the shared role is not, and stays.
 func TestCleanupLegacy_BindingToASharedRole(t *testing.T) {
 	host := helmHost("my-host")
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	mock := NewMockHelmClient(nil)
+	r, fc := newHelmReconciler(t, mock, nil, host)
 	shared := &rbacv1.ClusterRole{ObjectMeta: helmOwnedMeta("kcnas-operator-host-manager", "", "kcnas-operator", "kcnas-system")}
 	binding := legacyClusterRoleBinding("my-host", "ns")
 	binding.RoleRef.Name = shared.Name
 	createObjects(t, fc, shared, binding)
-	upgraded(t, fc, "my-host", "ns")
+	upgraded(t, fc, mock, "my-host", "ns")
 
-	if _, err := r.cleanupLegacyRBAC(context.Background(), host); err != nil {
+	if _, err := r.cleanupLegacyRBAC(context.Background(), host, nil); err != nil {
 		t.Fatalf("cleanupLegacyRBAC: %v", err)
 	}
 	assertDeleted(t, fc, binding)
@@ -640,7 +779,9 @@ var _ = Describe("Legacy RBAC cleanup against the API server", func() {
 func newSettledHost(t *testing.T, funcs *interceptor.Funcs, deploy *appsv1.Deployment) (*KDexHostReconciler, client.Client, types.NamespacedName) {
 	t.Helper()
 	host := hostWithRecordedSA("my-host", HelmStatusCompleted)
-	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), funcs, host)
+	// Its release is deployed, and Reconcile's heal grants the recorded
+	// ServiceAccount cluster reads.
+	r, fc := newHelmReconciler(t, NewMockHelmClient(map[string]map[string]string{"my-host": nil}), funcs, host)
 	r.RequeueDelay = 7 * time.Second
 	reconcilable(t, fc)
 	stored := getHost(t, fc, "my-host")

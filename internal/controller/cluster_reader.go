@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/Masterminds/semver/v3"
+	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,27 +53,6 @@ func checkHostManagerChartVersion(version string) error {
 		return &hostManagerChartUnsupportedError{fmt.Sprintf("host-manager chart version %q is older than the minimum supported %s", version, MinHostManagerChartVersion)}
 	}
 	return nil
-}
-
-// hostManagerServiceAccountName mirrors the host-manager chart's
-// "host-manager.serviceAccountName" helper (chart/templates/_helpers.tpl) over
-// the final merged values: the cluster-reader subject must name the SA the
-// chart actually renders. nexus forces the chart's fullname to the host name
-// via fullnameOverride.
-func hostManagerServiceAccountName(vals map[string]any, hostName string) string {
-	sa, _ := vals["serviceAccount"].(map[string]any)
-	name, _ := sa["name"].(string)
-	create := true
-	if c, ok := sa["create"].(bool); ok {
-		create = c
-	}
-	if name != "" {
-		return name
-	}
-	if create {
-		return hostName
-	}
-	return "default"
 }
 
 // ensureClusterReaderSubject adds the ServiceAccount to the fixed
@@ -138,17 +118,58 @@ func recordedHostManagerServiceAccount(host *kdexv1alpha1.KDexHost) string {
 	return host.Status.Attributes[AttributeHostManagerServiceAccount]
 }
 
+// deploymentServiceAccount is the ServiceAccount d's pods run as: the
+// namespace's "default" when the spec names none.
+func deploymentServiceAccount(d *appsv1.Deployment) string {
+	if sa := d.Spec.Template.Spec.ServiceAccountName; sa != "" {
+		return sa
+	}
+	return "default"
+}
+
+// hostManagerServiceAccount is the ServiceAccount host-manager runs as, read
+// from the live Deployment/<host> its chart renders (nexus forces the chart's
+// fullname to the host name): whatever the values and the chart version made
+// of it, that is the one that needs cluster reads. An unreadable Deployment
+// is an error, never a guess.
+func (r *KDexHostReconciler) hostManagerServiceAccount(ctx context.Context, host *kdexv1alpha1.KDexHost) (string, error) {
+	key := client.ObjectKey{Namespace: host.Namespace, Name: host.Name}
+	d := &appsv1.Deployment{}
+	if err := r.reader().Get(ctx, key, d); err != nil {
+		return "", fmt.Errorf("failed to read Deployment %s to grant its ServiceAccount cluster reads: %w", key, err)
+	}
+	return deploymentServiceAccount(d), nil
+}
+
+// clusterReaderGranted reports whether the cluster-reader binding, read live,
+// holds ServiceAccount namespace/sa. A missing binding holds no one.
+func (r *KDexHostReconciler) clusterReaderGranted(ctx context.Context, namespace, sa string) (bool, error) {
+	binding := &rbacv1.ClusterRoleBinding{}
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: clusterReaderBindingName}, binding); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to read ClusterRoleBinding %s: %w", clusterReaderBindingName, err)
+	}
+	return slices.Contains(binding.Subjects, rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: namespace}), nil
+}
+
 // grantHostManagerServiceAccount runs after a successful host-manager install:
-// it adds sa to the cluster-reader binding, removes the previously recorded
-// ServiceAccount if the name changed, and only then records sa. The record
-// moves last so a failure part-way is redone by the next run.
-func (r *KDexHostReconciler) grantHostManagerServiceAccount(ctx context.Context, host *kdexv1alpha1.KDexHost, sa string) error {
+// it adds the ServiceAccount the live Deployment runs as to the
+// cluster-reader binding, removes the previously recorded ServiceAccount if
+// the name changed, and only then records the new one. The record moves last
+// so a failure part-way is redone by the next run.
+func (r *KDexHostReconciler) grantHostManagerServiceAccount(ctx context.Context, host *kdexv1alpha1.KDexHost) error {
+	sa, err := r.hostManagerServiceAccount(ctx, host)
+	if err != nil {
+		return err
+	}
 	if err := r.ensureClusterReaderSubject(ctx, host.Namespace, sa); err != nil {
 		return err
 	}
 	key := client.ObjectKeyFromObject(host)
 	var previous string
-	_, err := r.patchHostStatus(ctx, key, func(h *kdexv1alpha1.KDexHost) bool {
+	_, err = r.patchHostStatus(ctx, key, func(h *kdexv1alpha1.KDexHost) bool {
 		previous = recordedHostManagerServiceAccount(h)
 		return false
 	})

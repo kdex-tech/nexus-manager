@@ -390,7 +390,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	// release-hash gate; a failure is on the host's condition and blocks
 	// nothing else. While legacy RBAC may remain, every return from here on
 	// requeues no later than RequeueDelay: no event marks the moment it can go.
-	legacyPending, cleanupErr := r.cleanupLegacyRBAC(ctx, &host)
+	legacyPending, cleanupErr := r.cleanupLegacyRBAC(ctx, &host, secrets)
 	if cleanupErr != nil {
 		log.Error(cleanupErr, "failed to clean up legacy host-manager RBAC", "host", host.Name, "namespace", host.Namespace)
 	}

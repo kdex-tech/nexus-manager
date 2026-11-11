@@ -57,6 +57,11 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	fc := b.Build()
+	// An install of a host's release renders its Deployment, as the chart
+	// does: nexus grants the ServiceAccount that Deployment runs as.
+	if bindable, ok := mock.(interface{ bindCluster(client.Client) }); ok {
+		bindable.bindCluster(fc)
+	}
 	return &KDexHostReconciler{
 		Client:                fc,
 		ControllerID:          "test",

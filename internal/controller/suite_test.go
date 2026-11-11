@@ -84,6 +84,11 @@ var suiteHelm struct {
 // setSuiteHelmClient makes the shared reconciler's Helm clients c; nil
 // restores the default, a fresh MockHelmClient per client.
 func setSuiteHelmClient(c utils.HelmClientInterface) {
+	// An install of a host's release renders its Deployment, as the chart
+	// does: nexus grants the ServiceAccount that Deployment runs as.
+	if bindable, ok := c.(interface{ bindCluster(client.Client) }); ok {
+		bindable.bindCluster(k8sClient)
+	}
 	suiteHelm.mu.Lock()
 	defer suiteHelm.mu.Unlock()
 	suiteHelm.client = c
@@ -94,7 +99,9 @@ func suiteHelmClientFactory(string, kdexv1alpha1.Secrets, logr.Logger) (utils.He
 	suiteHelm.mu.Lock()
 	defer suiteHelm.mu.Unlock()
 	if suiteHelm.client == nil {
-		return &MockHelmClient{}, nil
+		m := &MockHelmClient{}
+		m.bindCluster(k8sClient)
+		return m, nil
 	}
 	return suiteHelm.client, nil
 }

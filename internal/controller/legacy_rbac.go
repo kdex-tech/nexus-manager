@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"helm.sh/helm/v4/pkg/release/common"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,6 +16,7 @@ import (
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // Migration from the cluster-scoped host-manager RBAC (make-before-break).
@@ -178,7 +180,7 @@ func setLegacyRBACCondition(host *kdexv1alpha1.KDexHost, status metav1.Condition
 // the proof is met.
 //
 // Migration code: delete in release B (see the follow-up issue filed in Task N9).
-func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost) (pending bool, err error) {
+func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets) (pending bool, err error) {
 	role, binding, err := r.legacyRBAC(ctx, host)
 	if err != nil {
 		setLegacyRBACCondition(host, metav1.ConditionUnknown, reasonLegacyRBACReadFailed, err.Error())
@@ -190,7 +192,7 @@ func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1
 	}
 	names := legacyRBACNames(role, binding)
 
-	upgraded, err := r.hostManagerUpgraded(ctx, host)
+	upgraded, err := r.hostManagerUpgraded(ctx, host, secrets)
 	if err != nil {
 		setLegacyRBACCondition(host, metav1.ConditionTrue, reasonLegacyRBACProofReadFailed,
 			fmt.Sprintf("legacy %s remain: %v", names, err))
@@ -198,8 +200,8 @@ func (r *KDexHostReconciler) cleanupLegacyRBAC(ctx context.Context, host *kdexv1
 	}
 	if !upgraded {
 		setLegacyRBACCondition(host, metav1.ConditionTrue, reasonLegacyRBACAwaitingUpgrade,
-			fmt.Sprintf("legacy %s remain; they are deleted once the host-manager chart's RoleBinding/%s exists in %s and Deployment/%s has rolled out",
-				names, host.Name, host.Namespace, host.Name))
+			fmt.Sprintf("legacy %s remain; they are deleted once the host-manager chart's RoleBinding/%s exists in %s, Deployment/%s has rolled out, release %s is deployed, and the ServiceAccount the Deployment runs as is a subject of ClusterRoleBinding/%s",
+				names, host.Name, host.Namespace, host.Name, host.Name, clusterReaderBindingName))
 		return true, nil
 	}
 
@@ -229,13 +231,23 @@ func requeueForLegacyRBAC(res ctrl.Result, err error, after time.Duration) ctrl.
 }
 
 // hostManagerUpgraded reports whether the redesigned host-manager has replaced
-// the legacy grant: the chart's RoleBinding/<host>, Helm-owned by the host's
-// release, exists in the host's namespace -- read live, the RoleBinding cache
-// holds only the operator's own -- and Deployment/<host> has fully rolled out,
-// so no pod still running on the legacy grant is left.
+// the legacy grant, everything read live:
+//   - the chart's RoleBinding/<host>, Helm-owned by the host's release, exists
+//     in the host's namespace (the RoleBinding cache holds only the
+//     operator's own);
+//   - Deployment/<host> has fully rolled out, so no pod still running on the
+//     legacy grant is left (the cache can show a finished rollout while the
+//     next one has begun);
+//   - the release's latest revision is deployed -- read through the
+//     installer's Helm storage -- not failed after applying the RoleBinding
+//     and Deployment, nor left pending by a nexus killed mid-upgrade, which
+//     fails every later upgrade and so the grant after it;
+//   - the cluster-reader binding holds the ServiceAccount the Deployment runs
+//     as: before the migration the legacy binding is host-manager's only read
+//     of cluster-scoped objects, and the grant after an install can fail.
 //
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
-func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdexv1alpha1.KDexHost) (bool, error) {
+// Migration code: delete in release B (privilege-redesign follow-up issue).
+func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets) (bool, error) {
 	key := client.ObjectKey{Namespace: host.Namespace, Name: host.Name}
 	rb := &rbacv1.RoleBinding{}
 	if err := r.reader().Get(ctx, key, rb); err != nil {
@@ -249,13 +261,32 @@ func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdex
 	}
 
 	deployment := &appsv1.Deployment{}
-	if err := r.Get(ctx, key, deployment); err != nil {
+	if err := r.reader().Get(ctx, key, deployment); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to read Deployment %s: %w", key, err)
 	}
-	return deploymentRolledOut(deployment), nil
+	if !deploymentRolledOut(deployment) {
+		return false, nil
+	}
+
+	if r.HelmClientFactory == nil {
+		return false, errors.New("HelmClientFactory is nil")
+	}
+	helm, err := r.getOrCreateHelmClient(host.Name, host.Namespace, secrets, logf.FromContext(ctx).WithName("helm"))
+	if err != nil {
+		return false, err
+	}
+	status, err := helm.ReleaseStatus(host.Name)
+	if err != nil {
+		return false, err
+	}
+	if status != string(common.StatusDeployed) {
+		return false, nil
+	}
+
+	return r.clusterReaderGranted(ctx, host.Namespace, deploymentServiceAccount(deployment))
 }
 
 // deploymentRolledOut reports whether d's controller has seen its latest spec

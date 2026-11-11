@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -210,11 +211,17 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
 	objs := []client.Object{
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
 	}
 	for i := range numHosts {
+		// The Deployment the host-manager chart renders: the cluster-reader
+		// grant after the install reads its ServiceAccount.
+		objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("host-%d", i), Namespace: "default"}})
 		objs = append(objs, &kdexv1alpha1.KDexHost{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      fmt.Sprintf("host-%d", i),

@@ -1,16 +1,23 @@
 package controller
 
 import (
+	"context"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestCheckHostManagerChartVersion(t *testing.T) {
@@ -56,24 +63,79 @@ func TestBuildHostManagerChartSpec_NoRoleRef(t *testing.T) {
 	}
 }
 
-func TestHostManagerServiceAccountName(t *testing.T) {
-	tests := []struct {
-		name string
-		vals map[string]any
-		want string
-	}{
-		{"absent", map[string]any{}, "my-host"},
-		{"name", map[string]any{"serviceAccount": map[string]any{"name": "x"}}, "x"},
-		{"create false", map[string]any{"serviceAccount": map[string]any{"create": false}}, "default"},
-		{"create false with name", map[string]any{"serviceAccount": map[string]any{"create": false, "name": "y"}}, "y"},
-		{"create true", map[string]any{"serviceAccount": map[string]any{"create": true}}, "my-host"},
+// The ServiceAccount granted is the one the live Deployment runs as, read
+// after the install -- not one nexus works out from the values.
+func TestHelmRun_GrantsTheDeploymentsServiceAccount(t *testing.T) {
+	host := helmHost("my-host")
+	mock := &hookedHelmClient{MockHelmClient: NewMockHelmClient(nil)}
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	mock.afterInstall = func(release string) {
+		if release != "my-host" {
+			return
+		}
+		d := &appsv1.Deployment{}
+		if err := fc.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "my-host"}, d); err != nil {
+			t.Error(err)
+			return
+		}
+		d.Spec.Template.Spec.ServiceAccountName = "from-the-deployment"
+		if err := fc.Update(context.Background(), d); err != nil {
+			t.Error(err)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := hostManagerServiceAccountName(tt.vals, "my-host"); got != tt.want {
-				t.Errorf("got %q, want %q", got, tt.want)
+	r.runAsyncHelmReconcile(t.Context(), "ns", "my-host", "hash", nil, discardLogger())
+
+	if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != "from-the-deployment" || subs[0].Namespace != "ns" {
+		t.Errorf("subjects = %v, want ns/from-the-deployment", subs)
+	}
+	if got := recordedHostManagerServiceAccount(getHost(t, fc, "my-host")); got != "from-the-deployment" {
+		t.Errorf("recorded SA = %q, want from-the-deployment", got)
+	}
+}
+
+// A Deployment that cannot be read right after the install fails the grant,
+// and with it the run, which is retried: nothing is granted or recorded, and
+// no companion is installed.
+func TestHelmRun_GrantFailsWithoutTheDeployment(t *testing.T) {
+	host := helmHost("my-host", "a")
+	mock := NewMockHelmClient(nil)
+	funcs := &interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				return apierrors.NewNotFound(schema.GroupResource{Group: "apps", Resource: "deployments"}, key.Name)
 			}
-		})
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}
+	r, fc := newHelmReconciler(t, mock, funcs, host)
+	r.runAsyncHelmReconcile(t.Context(), "ns", "my-host", "hash", nil, discardLogger())
+
+	got := getHost(t, fc, "my-host")
+	if s := got.Status.Attributes[AttributeHelmReleaseStatus]; s != HelmStatusFailed {
+		t.Errorf("helm status = %q, want %q", s, HelmStatusFailed)
+	}
+	if subs := readClusterReaderSubjects(t, fc); len(subs) != 0 {
+		t.Errorf("subjects = %v, want none", subs)
+	}
+	if sa := recordedHostManagerServiceAccount(got); sa != "" {
+		t.Errorf("recorded SA = %q, want none", sa)
+	}
+	if slices.Contains(mock.Installed(), "a") {
+		t.Error("a companion was installed after the grant failed")
+	}
+}
+
+// A host name longer than the chart's 63-character fullname: the chart
+// renders a shortened ServiceAccount name, and that -- read from the
+// Deployment -- is what is granted.
+func TestHelmRun_LongHostNameGrantsTheRenderedServiceAccount(t *testing.T) {
+	name := strings.Repeat("h", 70)
+	host := helmHost(name)
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	r.runAsyncHelmReconcile(t.Context(), "ns", name, "hash", nil, discardLogger())
+
+	if subs := readClusterReaderSubjects(t, fc); len(subs) != 1 || subs[0].Name != name[:63] {
+		t.Errorf("subjects = %v, want ns/%s", subs, name[:63])
 	}
 }
 

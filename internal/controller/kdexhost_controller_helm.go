@@ -927,9 +927,9 @@ func (r *KDexHostReconciler) reconcileHostManagerChart(ctx context.Context, helm
 		return err
 	}
 
-	// The chart now exists, and with it the ServiceAccount host-manager runs
-	// as: let it read cluster-scoped objects.
-	return r.grantHostManagerServiceAccount(ctx, host, hostManagerServiceAccountName(spec.Values, host.Name))
+	// The chart now exists, and with it the Deployment host-manager runs in:
+	// let the ServiceAccount it runs as read cluster-scoped objects.
+	return r.grantHostManagerServiceAccount(ctx, host)
 }
 
 // checkHostManagerChart refuses a host whose effective host-manager chart

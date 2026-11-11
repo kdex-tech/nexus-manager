@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -8,6 +9,11 @@ import (
 	"time"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Compile-time conformance. Do NOT embed utils.HelmClientInterface here: an
@@ -41,6 +47,10 @@ type MockHelmClient struct {
 	statuses map[string]string
 	// rewrites counts DropClusterRBACFromRecord calls per release.
 	rewrites map[string]int
+
+	// cluster, when set, is where an install of a host-manager release
+	// renders its Deployment (see renderDeployment).
+	cluster client.Client
 
 	failList bool
 	// failUninstall names releases whose Uninstall returns an error.
@@ -83,6 +93,13 @@ func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 		}
 	}
 
+	if err := m.install(spec); err != nil {
+		return err
+	}
+	return m.renderDeployment(spec)
+}
+
+func (m *MockHelmClient) install(spec *utils.ChartSpec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -117,6 +134,80 @@ func (m *MockHelmClient) InstallOrUpgrade(spec *utils.ChartSpec) error {
 	maps.Copy(m.releaseLabels[spec.ReleaseName], spec.Labels)
 
 	return nil
+}
+
+// bindCluster makes installs of a host-manager release render its Deployment
+// in c, as the chart does. newHelmReconciler and the envtest suite bind every
+// mock they hand out.
+func (m *MockHelmClient) bindCluster(c client.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cluster == nil {
+		m.cluster = c
+	}
+}
+
+// renderDeployment stands in for the host-manager chart's Deployment: an
+// install of a host's own release (not a companion's) creates or updates
+// Deployment/<release> running as the ServiceAccount the chart would render
+// -- serviceAccount.name, else the fullname, the release name cut to 63
+// characters. nexus reads the ServiceAccount it grants from this Deployment.
+func (m *MockHelmClient) renderDeployment(spec *utils.ChartSpec) error {
+	m.mu.Lock()
+	c := m.cluster
+	m.mu.Unlock()
+	if c == nil || spec.Labels[LabelCompanionOf] != "" {
+		return nil
+	}
+	sa := spec.ReleaseName
+	if len(sa) > 63 {
+		sa = sa[:63]
+	}
+	if vals, ok := spec.Values["serviceAccount"].(map[string]any); ok {
+		if name, _ := vals["name"].(string); name != "" {
+			sa = name
+		}
+	}
+	ctx := context.Background()
+	d := &appsv1.Deployment{}
+	err := c.Get(ctx, client.ObjectKey{Namespace: spec.Namespace, Name: spec.ReleaseName}, d)
+	if apierrors.IsNotFound(err) {
+		labels := map[string]string{"app.kubernetes.io/instance": "host-manager"}
+		d = &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Namespace: spec.Namespace, Name: spec.ReleaseName},
+			Spec: appsv1.DeploymentSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						ServiceAccountName: sa,
+						Containers:         []corev1.Container{{Name: "host-manager", Image: "host-manager"}},
+					},
+				},
+			},
+		}
+		return c.Create(ctx, d)
+	}
+	if err != nil {
+		return err
+	}
+	if d.Spec.Template.Spec.ServiceAccountName == sa {
+		return nil
+	}
+	d.Spec.Template.Spec.ServiceAccountName = sa
+	return c.Update(ctx, d)
+}
+
+// addRelease makes the release exist, with no labels and status deployed.
+func (m *MockHelmClient) addRelease(releaseName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.releaseLabels == nil {
+		m.releaseLabels = map[string]map[string]string{}
+	}
+	if _, ok := m.releaseLabels[releaseName]; !ok {
+		m.releaseLabels[releaseName] = map[string]string{}
+	}
 }
 
 func (m *MockHelmClient) Uninstall(releaseName string) error {
