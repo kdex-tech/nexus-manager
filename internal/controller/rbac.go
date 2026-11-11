@@ -106,3 +106,11 @@ package controller
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,    verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,           verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=serving.knative.dev,resources=services,                     verbs=get;list;watch;create;update;patch;delete
+// Privilege redesign: the per-namespace installer SA is impersonated for Helm,
+// bound to the fixed installer ClusterRole, and the fixed cluster-reader
+// ClusterRoleBinding's subject list is maintained.
+// +kubebuilder:rbac:groups=core,resources=serviceaccounts,resourceNames=kdex-installer,verbs=impersonate
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer,verbs=bind
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=kcnas-operator-host-manager-cluster-reader,verbs=get;update;patch
+// +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get

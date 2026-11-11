@@ -64,10 +64,8 @@ spec:
             {{- end }}
           command:
             - /manager
-          {{- if .Values.controllerManager.container.env }}
+          {{- if or .Values.controllerManager.container.env .Values.controllerManager.container.extraEnv }}
           env:
-            - name: HOST_MANAGER_CLUSTER_ROLE
-              value: {{ include "kcnas-operator.fullname" . }}-host-manager
             {{- range $key, $value := .Values.controllerManager.container.env }}
             - name: {{ $key }}
               value: {{ $value }}

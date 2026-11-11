@@ -1,0 +1,87 @@
+{{- if .Values.rbac.enable }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: kcnas-operator
+    app.kubernetes.io/name: {{ include "kcnas-operator.name" . }}
+    helm.sh/chart: {{ include "kcnas-operator.chart" . }}
+    kdex.dev/aggregate-to-installer: "true"
+  name: {{ include "kcnas-operator.fullname" . }}-installer-base
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kdex.dev
+  resources:
+  - kdexapps
+  - kdexfaasadaptors
+  - kdexfunctions
+  - kdexhostextensions
+  - kdexpagearchetypes
+  - kdexpagefooters
+  - kdexpageheaders
+  - kdexpagenavigations
+  - kdexpages
+  - kdexrolebindings
+  - kdexroles
+  - kdexscriptlibraries
+  - kdexthemes
+  - kdextranslations
+  - kdexutilitypages
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - bind
+  - escalate
+{{- end -}}

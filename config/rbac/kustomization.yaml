@@ -26,4 +26,7 @@ resources:
 - metrics_auth_role_binding.yaml
 - metrics_reader_role.yaml
 # KDex custom
-- host-controller-role.yaml
+- installer_role.yaml
+- installer_base_role.yaml
+- cluster_reader_role.yaml
+- cluster_reader_role_binding.yaml

@@ -26,11 +26,25 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resourceNames:
+  - kdex-installer
+  resources:
+  - serviceaccounts
+  verbs:
+  - impersonate
 - apiGroups:
   - apps
   resources:
@@ -234,6 +248,16 @@ rules:
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
+  resourceNames:
+  - kcnas-operator-host-manager-cluster-reader
+  resources:
+  - clusterrolebindings
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
   - clusterroles
@@ -243,6 +267,25 @@ rules:
   - get
   - list
   - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - kcnas-operator-installer
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - update
   - watch
 - apiGroups:
