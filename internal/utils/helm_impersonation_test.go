@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -8,19 +10,26 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// isolateFromKubeconfig leaves nothing a kubeconfig loader could find: no
-// KUBECONFIG, no HELM_KUBE* override, and a HOME with no ~/.kube/config. A
-// pod's environment, where the in-cluster fallback was lost.
+// isolateFromKubeconfig leaves nothing a kubeconfig loader could find: a
+// KUBECONFIG naming an empty file, and no HELM_KUBE* override. An empty or
+// unset KUBECONFIG would not do: the loader then falls back to
+// clientcmd.RecommendedHomeFile, the developer's ~/.kube/config, fixed when
+// the package initialised -- setting HOME here changes nothing. So a
+// regression to kubeconfig loading finds no cluster, rather than a real one.
 func isolateFromKubeconfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("KUBECONFIG", "")
-	t.Setenv("HOME", t.TempDir())
+	empty := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KUBECONFIG", empty)
 	t.Setenv("HELM_KUBEAPISERVER", "")
 	t.Setenv("HELM_KUBETOKEN", "")
 }
 
+// baseRESTConfig names a TEST-NET-1 address (RFC 5737): nothing answers it.
 func baseRESTConfig() *rest.Config {
-	return &rest.Config{Host: "https://10.0.0.1:443", BearerToken: "x"}
+	return &rest.Config{Host: "https://192.0.2.1:443", BearerToken: "x"}
 }
 
 // helmGetterConfigs returns the REST config the client's Helm configuration
@@ -60,8 +69,8 @@ func TestNewHelmClient_InstallerUsesTheBaseConfigWithImpersonation(t *testing.T)
 	}
 	action, kc := helmGetterConfigs(t, h)
 	for what, cfg := range map[string]*rest.Config{"action": action, "kube client": kc} {
-		if cfg.Host != "https://10.0.0.1:443" {
-			t.Errorf("%s Host = %q, want https://10.0.0.1:443", what, cfg.Host)
+		if cfg.Host != "https://192.0.2.1:443" {
+			t.Errorf("%s Host = %q, want https://192.0.2.1:443", what, cfg.Host)
 		}
 		if cfg.BearerToken != "x" {
 			t.Errorf("%s BearerToken = %q, want the base config's", what, cfg.BearerToken)
@@ -84,8 +93,8 @@ func TestNewHelmClient_OperatorUsesTheBaseConfigUnimpersonated(t *testing.T) {
 	}
 	action, kc := helmGetterConfigs(t, h)
 	for what, cfg := range map[string]*rest.Config{"action": action, "kube client": kc} {
-		if cfg.Host != "https://10.0.0.1:443" {
-			t.Errorf("%s Host = %q, want https://10.0.0.1:443", what, cfg.Host)
+		if cfg.Host != "https://192.0.2.1:443" {
+			t.Errorf("%s Host = %q, want https://192.0.2.1:443", what, cfg.Host)
 		}
 		if cfg.Impersonate.UserName != "" || len(cfg.Impersonate.Groups) != 0 {
 			t.Errorf("%s Impersonate = %+v, want none", what, cfg.Impersonate)
@@ -111,7 +120,7 @@ func TestNewHelmClient_LoaderNamesTheClientsNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Host != "https://10.0.0.1:443" || cfg.Impersonate.UserName != InstallerUser("ns") {
+	if cfg.Host != "https://192.0.2.1:443" || cfg.Impersonate.UserName != InstallerUser("ns") {
 		t.Errorf("loader config = %q as %q, want the base config impersonating the installer", cfg.Host, cfg.Impersonate.UserName)
 	}
 }

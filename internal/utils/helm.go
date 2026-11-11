@@ -134,6 +134,8 @@ type HelmClient struct {
 	// connection is restConfig, through a restConfigGetter.
 	settings     *cli.EnvSettings
 	actionConfig *action.Configuration
+	// getter is the connection actionConfig acts through.
+	getter *restConfigGetter
 	// impersonate is the user every request acts as; empty is the base
 	// config's own identity.
 	impersonate string
@@ -249,8 +251,9 @@ func NewHelmClient(
 		helmDriver = "secret"
 	}
 
+	h.getter = newRESTConfigGetter(restConfig, namespace, h.impersonate, settings)
 	if err := actionConfig.Init(
-		newRESTConfigGetter(restConfig, namespace, h.impersonate, settings),
+		h.getter,
 		namespace,
 		helmDriver,
 	); err != nil {
@@ -261,10 +264,25 @@ func NewHelmClient(
 	return h, nil
 }
 
+// freshen makes the operation starting now see the cluster as it is now.
+// A client is cached per host and identity and serves operation after
+// operation on one action configuration, which keeps what it learns: the
+// Capabilities a chart renders against (.Capabilities.APIVersions), read once
+// and kept, and the discovery the REST mappings come from. Left alone, a kind
+// that appeared after the client's first operation -- a CRD installed since
+// -- would be missing from both until the operator restarted, and every later
+// install or upgrade of a chart using it would fail with "no matches for
+// kind". The caller holds h.mu, which every reader of Capabilities holds.
+func (h *HelmClient) freshen() {
+	h.actionConfig.Capabilities = nil
+	h.getter.invalidateDiscovery()
+}
+
 // InstallOrUpgrade installs or upgrades a Helm chart.
 func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.freshen()
 
 	// Bind the registry just in time
 	err := h.registryBind(spec)
@@ -431,6 +449,10 @@ func (h *HelmClient) ReleaseObjects(releaseName string) ([]ReleaseObject, error)
 // host-manager chart, the companion charts) relies on a delete hook.
 // See kdex-tech/nexus-manager#46.
 func (h *HelmClient) Uninstall(releaseName string) error {
+	// Discovery only, and without h.mu: an uninstall reads no Capabilities,
+	// and a teardown that has stopped waiting for a run still inside an
+	// uncancellable Helm call must not queue behind it.
+	h.getter.invalidateDiscovery()
 	client := action.NewUninstall(h.actionConfig)
 	client.DisableHooks = true
 	client.Timeout = HelmCallTimeout

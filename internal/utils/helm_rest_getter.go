@@ -57,8 +57,12 @@ func (g *restConfigGetter) ToRESTConfig() (*rest.Config, error) {
 }
 
 // ToDiscoveryClient returns one memory-cached discovery client for the
-// getter's lifetime, as its REST mappers share it. Helm invalidates it before
-// reading the server's capabilities, and a mapper re-reads it on a miss.
+// getter's lifetime, which every REST mapper it hands out reads. Nothing
+// refreshes it on its own: Helm invalidates it only when it first reads a
+// configuration's Capabilities or installs a chart's crds/, and a mapper
+// re-reads it on a miss only while it is not yet populated. So a HelmClient
+// invalidates it as each operation starts (freshen), or a kind that appeared
+// after the client first ran would never be mapped.
 func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -76,6 +80,24 @@ func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterfa
 	return g.discovery, nil
 }
 
+// invalidateDiscovery makes the next discovery read go to the server. It is
+// safe while an operation is running: the cache takes its own lock. A nil
+// getter -- a client assembled over a fake kube client -- has nothing to
+// invalidate.
+func (g *restConfigGetter) invalidateDiscovery() {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	dc := g.discovery
+	g.mu.Unlock()
+	if dc != nil {
+		dc.Invalidate()
+	}
+}
+
+// ToRESTMapper returns a new mapper over the shared discovery cache: no mapper
+// outlives the call that asked for it, so none needs resetting.
 func (g *restConfigGetter) ToRESTMapper() (meta.RESTMapper, error) {
 	dc, err := g.ToDiscoveryClient()
 	if err != nil {
