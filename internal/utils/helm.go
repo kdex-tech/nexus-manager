@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/rest"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -127,12 +128,19 @@ type ReleaseObject struct {
 
 // HelmClient is a wrapper around helm v4 SDK to simplify Helm operations.
 type HelmClient struct {
+	// settings carries what Helm reads beyond the cluster connection --
+	// registry, repository and cache paths, history and rate limits. Its
+	// kube fields (KUBECONFIG, HELM_KUBE*) are never read: the cluster
+	// connection is restConfig, through a restConfigGetter.
 	settings     *cli.EnvSettings
 	actionConfig *action.Configuration
-	log          logr.Logger
-	namespace    string
-	mu           sync.RWMutex
-	secrets      kdexv1alpha1.Secrets
+	// impersonate is the user every request acts as; empty is the base
+	// config's own identity.
+	impersonate string
+	log         logr.Logger
+	namespace   string
+	mu          sync.RWMutex
+	secrets     kdexv1alpha1.Secrets
 	// maxFetchBytes overrides RegistryFetchMaxBytes when positive.
 	maxFetchBytes int64
 	// metaReader lists release Secrets as metadata only (see ListReleases).
@@ -178,10 +186,10 @@ const (
 	HelmAsOperator
 )
 
-// WithImpersonation makes the client act as user. It is applied before the
-// action configuration is initialised, which captures the REST getter.
+// WithImpersonation makes the client act as user, on the base REST config it
+// is given.
 func WithImpersonation(user string) HelmClientOption {
-	return func(h *HelmClient) { h.settings.KubeAsUser = user }
+	return func(h *HelmClient) { h.impersonate = user }
 }
 
 // registryLimits is defaultRegistryFetchLimits, with the client's byte budget.
@@ -195,13 +203,29 @@ func (h *HelmClient) registryLimits() registryFetchLimits {
 
 var _ HelmClientInterface = (*HelmClient)(nil)
 
-// NewHelmClient creates a new HelmClient for the given namespace.
+// NewHelmClient creates a new HelmClient for the given namespace, acting on
+// the cluster restConfig connects to -- the operator's own config: in-cluster
+// in a pod, envtest's in a test -- as restConfig's identity, or as the user
+// WithImpersonation names. restConfig is copied, never changed.
+//
+// The connection is never Helm's own kubeconfig loading (cli.EnvSettings'
+// RESTClientGetter). Given an impersonation override, client-go's deferred
+// loader treats the merged config as non-default and skips its in-cluster
+// fallback, so in a pod -- no kubeconfig file -- an impersonating client
+// targeted http://localhost:8080 (client-go v0.35.2,
+// tools/clientcmd/merged_client_builder.go; kubectl --as in a pod fails the
+// same way). Nor would its environment (KUBECONFIG, HELM_KUBEASUSER,
+// HELM_KUBEAPISERVER, ...) be a connection the operator should take.
 func NewHelmClient(
 	namespace string,
+	restConfig *rest.Config,
 	secrets kdexv1alpha1.Secrets,
 	logger logr.Logger,
 	opts ...HelmClientOption,
 ) (*HelmClient, error) {
+	if restConfig == nil {
+		return nil, errors.New("failed to create helm client: no REST config")
+	}
 	settings := cli.New()
 	settings.SetNamespace(namespace)
 
@@ -226,7 +250,7 @@ func NewHelmClient(
 	}
 
 	if err := actionConfig.Init(
-		settings.RESTClientGetter(),
+		newRESTConfigGetter(restConfig, namespace, h.impersonate, settings),
 		namespace,
 		helmDriver,
 	); err != nil {

@@ -395,14 +395,14 @@ func TestRegistryClient_BoundsTheBytesOfATagListing(t *testing.T) {
 
 // The byte budget is the manager's to set.
 func TestHelmClient_TakesTheRegistryFetchByteBudget(t *testing.T) {
-	c, err := NewHelmClient("ns", nil, logr.Discard())
+	c, err := NewHelmClient("ns", baseRESTConfig(), nil, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := c.registryLimits().maxBytes; got != RegistryFetchMaxBytes {
 		t.Errorf("default byte budget = %d, want %d", got, RegistryFetchMaxBytes)
 	}
-	c, err = NewHelmClient("ns", nil, logr.Discard(), WithRegistryFetchMaxBytes(123))
+	c, err = NewHelmClient("ns", baseRESTConfig(), nil, logr.Discard(), WithRegistryFetchMaxBytes(123))
 	if err != nil {
 		t.Fatal(err)
 	}

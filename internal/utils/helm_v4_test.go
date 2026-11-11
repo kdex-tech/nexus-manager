@@ -16,7 +16,7 @@ import (
 
 func TestHelmClient_Initialization(t *testing.T) {
 	namespace := "test-namespace"
-	client, err := NewHelmClient(namespace, nil, logr.Logger{})
+	client, err := NewHelmClient(namespace, baseRESTConfig(), nil, logr.Logger{})
 	require.NoError(t, err)
 	assert.NotNil(t, client)
 	assert.NotNil(t, client.actionConfig)
@@ -26,7 +26,7 @@ func TestHelmClient_Initialization(t *testing.T) {
 func TestHelmClient_OCIChartReachability(t *testing.T) {
 	// This test requires internet access and might be slow.
 	// We use a known public OCI chart for testing.
-	client, err := NewHelmClient("default", nil, logr.Logger{})
+	client, err := NewHelmClient("default", baseRESTConfig(), nil, logr.Logger{})
 	require.NoError(t, err)
 
 	chartName := "oci://ghcr.io/kdex-tech/charts/host-manager"
@@ -70,7 +70,7 @@ func TestHelmClient_SecretWithPlainHTTP(t *testing.T) {
 
 	serverHostName := server.URL[7:]
 
-	client, err := NewHelmClient("default", kdexv1alpha1.Secrets{
+	client, err := NewHelmClient("default", baseRESTConfig(), kdexv1alpha1.Secrets{
 		corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "foo",

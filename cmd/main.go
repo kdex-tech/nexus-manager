@@ -328,7 +328,9 @@ func main() {
 			if identity == utils.HelmAsInstaller {
 				opts = append(opts, utils.WithImpersonation(utils.InstallerUser(namespace)))
 			}
-			return utils.NewHelmClient(namespace, secrets, logger, opts...)
+			// Both identities act on the manager's own REST config: the
+			// installer impersonating on it, the operator as it is.
+			return utils.NewHelmClient(namespace, mgr.GetConfig(), secrets, logger, opts...)
 		},
 		HelmRenderConcurrency: helmRenderConcurrency,
 		RequeueDelay:          requeueDelay,
