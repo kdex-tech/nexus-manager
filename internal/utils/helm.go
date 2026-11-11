@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,13 +23,13 @@ import (
 	"helm.sh/helm/v4/pkg/getter"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
-	"helm.sh/helm/v4/pkg/release"
-	v1 "helm.sh/helm/v4/pkg/repo/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/retry"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -104,7 +105,6 @@ type ChartSpec struct {
 
 // HelmClientInterface defines the operations for Helm management.
 type HelmClientInterface interface {
-	AddRepository(name, repo string) error
 	InstallOrUpgrade(spec *ChartSpec) error
 	ListReleases(matchLabels map[string]string) ([]string, error)
 	Uninstall(releaseName string) error
@@ -120,6 +120,8 @@ type HelmClient struct {
 	secrets      kdexv1alpha1.Secrets
 	// maxFetchBytes overrides RegistryFetchMaxBytes when positive.
 	maxFetchBytes int64
+	// metaReader lists release Secrets as metadata only (see ListReleases).
+	metaReader ctrlclient.Reader
 }
 
 // HelmClientOption configures a HelmClient.
@@ -129,6 +131,15 @@ type HelmClientOption func(*HelmClient)
 // a registry, in place of RegistryFetchMaxBytes.
 func WithRegistryFetchMaxBytes(n int64) HelmClientOption {
 	return func(h *HelmClient) { h.maxFetchBytes = n }
+}
+
+// WithMetadataReader sets the reader ListReleases uses to list Helm's release
+// Secrets as metadata only, so the operator never holds a release's payload
+// (the chart, its values, its manifest) in memory just to learn its name.
+// Give it an uncached reader: a cached one would start an informer holding
+// every Secret's metadata in the namespace-wide fleet.
+func WithMetadataReader(r ctrlclient.Reader) HelmClientOption {
+	return func(h *HelmClient) { h.metaReader = r }
 }
 
 // InstallerServiceAccountName is the per-namespace ServiceAccount nexus
@@ -211,37 +222,6 @@ func NewHelmClient(
 	return h, nil
 }
 
-// AddRepository adds a Helm repository.
-func (h *HelmClient) AddRepository(name, repo string) error {
-	// Helm v4 still uses repositories.yaml for non-OCI charts.
-	f, err := v1.LoadFile(h.settings.RepositoryConfig)
-	if err != nil {
-		if os.IsNotExist(err) {
-			f = v1.NewFile()
-		} else {
-			return fmt.Errorf("failed to load repository file: %w", err)
-		}
-	}
-
-	if f.Has(name) {
-		// Already exists
-		return nil
-	}
-
-	c := v1.Entry{
-		Name: name,
-		URL:  repo,
-	}
-
-	f.Add(&c)
-
-	if err := f.WriteFile(h.settings.RepositoryConfig, 0644); err != nil {
-		return fmt.Errorf("failed to write repository file: %w", err)
-	}
-
-	return nil
-}
-
 // InstallOrUpgrade installs or upgrades a Helm chart.
 func (h *HelmClient) InstallOrUpgrade(spec *ChartSpec) error {
 	h.mu.Lock()
@@ -291,27 +271,46 @@ func (h *HelmClient) ShowChart(spec *ChartSpec) (string, error) {
 }
 
 // ListReleases returns the names of releases in this client's namespace that
-// carry every one of matchLabels. Releases in any state are returned — a
+// carry every one of matchLabels. Releases in any state are returned -- a
 // release wedged in pending-upgrade is still one we own and must be able to
 // clean up.
+//
+// Helm stores each revision of a release as a Secret labelled owner=helm and
+// name=<release>, plus the labels the release was installed with. Listing
+// those as metadata reads no release payload, where Helm's own list action
+// decodes every revision's chart, values and manifest. There is no fallback to
+// that: without a metadata reader this is an error.
 func (h *HelmClient) ListReleases(matchLabels map[string]string) ([]string, error) {
-	client := action.NewList(h.actionConfig)
-	client.StateMask = action.ListAll
-	client.Selector = labels.Set(matchLabels).String()
+	if h.metaReader == nil {
+		return nil, errors.New("failed to list releases: no metadata reader configured (WithMetadataReader)")
+	}
 
-	releases, err := client.Run()
-	if err != nil {
+	sel := labels.Set{"owner": "helm"}
+	for k, v := range matchLabels {
+		sel[k] = v
+	}
+	list := &metav1.PartialObjectMetadataList{}
+	list.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("SecretList"))
+	if err := h.metaReader.List(context.Background(), list,
+		ctrlclient.InNamespace(h.namespace), ctrlclient.MatchingLabels(sel)); err != nil {
 		return nil, fmt.Errorf("failed to list releases: %w", err)
 	}
 
-	names := make([]string, 0, len(releases))
-	for _, rel := range releases {
-		accessor, err := release.NewAccessor(rel)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read release: %w", err)
+	// One Secret per revision: collapse to release names.
+	seen := make(map[string]struct{}, len(list.Items))
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		name := list.Items[i].Labels["name"]
+		if name == "" {
+			continue
 		}
-		names = append(names, accessor.Name())
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
 	}
+	slices.Sort(names)
 	return names, nil
 }
 

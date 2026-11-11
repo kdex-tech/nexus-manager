@@ -159,10 +159,6 @@ func (m *MockHelmClient) ListReleases(matchLabels map[string]string) ([]string, 
 	return names, nil
 }
 
-func (m *MockHelmClient) AddRepository(name, url string) error {
-	return nil
-}
-
 // --- accessors: every one returns a copy ---
 
 func (m *MockHelmClient) Installed() []string {

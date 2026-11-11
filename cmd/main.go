@@ -29,6 +29,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"helm.sh/helm/v4/pkg/chart/loader/archive"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -69,6 +70,14 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// applyChartSizeLimits sets Helm's process-wide bounds on a chart archive's
+// decompressed size and on its largest file. Helm reads them as package
+// variables on every load, so this is set once, at startup.
+func applyChartSizeLimits(chartBytes, fileBytes int64) {
+	archive.MaxDecompressedChartSize = chartBytes
+	archive.MaxDecompressedFileSize = fileBytes
+}
+
 // nolint:gocyclo
 func main() {
 	var configFile string
@@ -76,6 +85,7 @@ func main() {
 	var requeueDelaySeconds int
 	var helmRenderConcurrency int
 	var registryFetchMaxBytes int64
+	var chartMaxDecompressedBytes, chartMaxFileBytes int64
 	var memoryLimitRatio float64
 	var pprofAddr string
 
@@ -100,6 +110,14 @@ func main() {
 		"A companion chart is tenant input, and Helm holds what it reads in memory -- tag listings at about nine times "+
 		"their size -- so this bounds what a registry can make the operator allocate. Raising it needs the memory limit "+
 		"raised to match. Must be positive.")
+	flag.Int64Var(&chartMaxDecompressedBytes, "chart-max-decompressed-bytes", 16<<20, "Maximum decompressed size of one "+
+		"chart archive. A companion chart is tenant input, and a small archive can expand enormously, so Helm's own "+
+		"100MiB default is far above what a real chart needs. Helm holds the decompressed chart in memory and "+
+		"rendering multiplies it, so the budget rule is: this cap x the render overhead x --helm-render-concurrency must "+
+		"fit the memory limit. Raising it needs the memory limit raised to match. Must be positive.")
+	flag.Int64Var(&chartMaxFileBytes, "chart-max-file-bytes", 4<<20, "Maximum decompressed size of any one file in a "+
+		"chart archive. Same budget rule as --chart-max-decompressed-bytes: the cap x the render overhead x "+
+		"--helm-render-concurrency must fit the memory limit. Must be positive.")
 	flag.Float64Var(&memoryLimitRatio, "memory-limit-ratio", 0.9, "Fraction of the container's cgroup memory limit to "+
 		"install as Go's soft memory limit (GOMEMLIMIT), so the garbage collector applies backpressure before the kernel "+
 		"OOMKills the process. This is the last-resort safety net under the bound set by --helm-render-concurrency: "+
@@ -146,6 +164,13 @@ func main() {
 		setupLog.Error(fmt.Errorf("%d is not positive", registryFetchMaxBytes), "invalid --registry-fetch-max-bytes")
 		os.Exit(1)
 	}
+
+	if chartMaxDecompressedBytes <= 0 || chartMaxFileBytes <= 0 {
+		setupLog.Error(fmt.Errorf("%d and %d are not both positive", chartMaxDecompressedBytes, chartMaxFileBytes),
+			"invalid --chart-max-decompressed-bytes or --chart-max-file-bytes")
+		os.Exit(1)
+	}
+	applyChartSizeLimits(chartMaxDecompressedBytes, chartMaxFileBytes)
 
 	// A render spike that OOMKills the operator can wedge a Helm release in
 	// pending-upgrade, so trade GC CPU for survival before the kernel decides.
@@ -298,7 +323,8 @@ func main() {
 		ControllerID:  hostname,
 		Ctx:           ctx,
 		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
-			opts := []utils.HelmClientOption{utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes)}
+			opts := []utils.HelmClientOption{utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes),
+				utils.WithMetadataReader(mgr.GetAPIReader())}
 			if identity == utils.HelmAsInstaller {
 				opts = append(opts, utils.WithImpersonation(utils.InstallerUser(namespace)))
 			}

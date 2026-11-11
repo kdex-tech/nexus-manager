@@ -13,7 +13,7 @@ import (
 func hostWithCompanions(name string, companionNames ...string) *kdexv1alpha1.KDexHost {
 	companions := make([]kdexv1alpha1.CompanionChart, 0, len(companionNames))
 	for _, n := range companionNames {
-		companions = append(companions, kdexv1alpha1.CompanionChart{Name: n, Chart: "some-chart"})
+		companions = append(companions, kdexv1alpha1.CompanionChart{Name: n, Chart: "oci://registry.example/charts/some-chart"})
 	}
 	return &kdexv1alpha1.KDexHost{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},

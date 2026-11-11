@@ -12,7 +12,6 @@ import (
 // stubHelmClient is a no-op HelmClientInterface used to identify cache entries.
 type stubHelmClient struct{ id int }
 
-func (s *stubHelmClient) AddRepository(string, string) error      { return nil }
 func (s *stubHelmClient) InstallOrUpgrade(*utils.ChartSpec) error { return nil }
 func (s *stubHelmClient) Uninstall(string) error                  { return nil }
 

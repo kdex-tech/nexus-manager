@@ -659,6 +659,14 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		return
 	}
 
+	// 0. Refuse companion sources outright, before anything is installed: a
+	// host whose companions cannot all be fetched safely installs none of its
+	// charts, the host-manager chart included.
+	if err := checkCompanionSources(host); err != nil {
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+		return
+	}
+
 	// 1. Reconcile kdex-host-manager chart
 	if r.haltHelmRun(ctx, namespace, name, hash, r.reconcileHostManagerChart(c, host, proceed), log) {
 		return
@@ -854,13 +862,18 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 		// and decide whether to retry (see reconcileHelmReleases#3b/#3c). The
 		// attempt was counted when it started.
 		host.Status.Attributes[AttributeHelmReleaseLastAttempt] = time.Now().UTC().Format(time.RFC3339)
+		reason := kdexv1alpha1.ConditionReasonReconcileError
+		var refused *companionRefusedError
+		if errors.As(err, &refused) {
+			reason = ConditionReasonCompanionChartRefused
+		}
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
 				Progressing: metav1.ConditionFalse,
 				Degraded:    metav1.ConditionTrue,
 			},
-			kdexv1alpha1.ConditionReasonReconcileError,
+			reason,
 			err.Error(),
 		)
 	} else {
@@ -991,12 +1004,6 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 // reconcileCompanionChart installs or upgrades one companion release, asking
 // proceed once its chart is in hand.
 func (r *KDexHostReconciler) reconcileCompanionChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, companion kdexv1alpha1.CompanionChart, proceed func() error) error {
-	if companion.Repository != "" {
-		if err := helmClient.AddRepository(companion.Name, companion.Repository); err != nil {
-			return err
-		}
-	}
-
 	vals, err := common.ReadValues([]byte(companion.Values))
 	if err != nil {
 		return err
@@ -1238,6 +1245,37 @@ func staleCompanions(recorded, declared, labelled map[string]struct{}) []string 
 	}
 	slices.Sort(stale)
 	return stale
+}
+
+// ConditionReasonCompanionChartRefused is the reason on a host whose companion
+// chart was refused before anything was installed. It lives here, not in
+// kdex-crds, which declares no reason for it.
+const ConditionReasonCompanionChartRefused kdexv1alpha1.ConditionReason = "CompanionChartRefused"
+
+// companionRefusedError is a companion chart the operator will not fetch.
+type companionRefusedError struct{ msg string }
+
+func (e *companionRefusedError) Error() string { return e.msg }
+
+// checkCompanionSources refuses every companion that is not an OCI chart
+// reference. A companion is tenant input, and only a registry fetch is bounded
+// (time, requests, bytes): a local path would read the operator's filesystem,
+// and an http(s) or "repo/chart" reference would need a classic repository
+// index, which is unbounded and not supported. The Repository field names such
+// an index, so it is refused too.
+func checkCompanionSources(host *kdexv1alpha1.KDexHost) error {
+	if host.Spec.Helm == nil {
+		return nil
+	}
+	for _, companion := range host.Spec.Helm.CompanionCharts {
+		if !strings.HasPrefix(companion.Chart, "oci://") {
+			return &companionRefusedError{fmt.Sprintf("companion chart %q: chart %q must be an oci:// reference", companion.Name, companion.Chart)}
+		}
+		if companion.Repository != "" {
+			return &companionRefusedError{fmt.Sprintf("companion chart %q: repository %q is not supported; companions are fetched from oci:// references only", companion.Name, companion.Repository)}
+		}
+	}
+	return nil
 }
 
 // checkCompanionNames refuses a companion named after a KDexHost in the

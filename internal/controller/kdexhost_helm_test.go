@@ -94,7 +94,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 					CompanionCharts: []kdexv1alpha1.CompanionChart{
 						{
 							Name:  "my-companion",
-							Chart: "some-chart",
+							Chart: "oci://registry.example/charts/some-chart",
 						},
 					},
 				},
@@ -127,8 +127,8 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				},
 				Helm: &kdexv1alpha1.HelmConfig{
 					CompanionCharts: []kdexv1alpha1.CompanionChart{
-						{Name: "companion-a", Chart: "chart-a"},
-						{Name: "companion-b", Chart: "chart-b"},
+						{Name: "companion-a", Chart: "oci://registry.example/charts/chart-a"},
+						{Name: "companion-b", Chart: "oci://registry.example/charts/chart-b"},
 					},
 				},
 			})
@@ -147,7 +147,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 					return err
 				}
 				latest.Spec.Helm.CompanionCharts = []kdexv1alpha1.CompanionChart{
-					{Name: "companion-a", Chart: "chart-a"},
+					{Name: "companion-a", Chart: "oci://registry.example/charts/chart-a"},
 				}
 				return k8sClient.Update(ctx, latest)
 			}, "10s", "1s").Should(Succeed())
@@ -171,7 +171,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				},
 				Helm: &kdexv1alpha1.HelmConfig{
 					CompanionCharts: []kdexv1alpha1.CompanionChart{
-						{Name: "lonely-companion", Chart: "chart-a"},
+						{Name: "lonely-companion", Chart: "oci://registry.example/charts/chart-a"},
 					},
 				},
 			})
