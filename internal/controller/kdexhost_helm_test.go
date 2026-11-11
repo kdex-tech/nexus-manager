@@ -276,7 +276,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				},
 				Helm: &kdexv1alpha1.HelmConfig{
 					HostManager: &kdexv1alpha1.HostManagerHelmConfig{
-						Version: "0.2.18",
+						Version: "0.33.0",
 					},
 				},
 			})
@@ -285,7 +285,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Eventually(func() string {
 				return mockHelmClient.VersionFor(resource.Name)
-			}, "10s", "1s").Should(Equal("0.2.18"))
+			}, "10s", "1s").Should(Equal("0.33.0"))
 
 			// Update the version
 			Eventually(func() error {
@@ -293,13 +293,13 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, latest); err != nil {
 					return err
 				}
-				latest.Spec.Helm.HostManager.Version = "0.2.19"
+				latest.Spec.Helm.HostManager.Version = "0.33.1"
 				return k8sClient.Update(ctx, latest)
 			}, "10s", "1s").Should(Succeed())
 
 			Eventually(func() string {
 				return mockHelmClient.VersionFor(resource.Name)
-			}, "10s", "1s").Should(Equal("0.2.19"), "Expected helm chart to be upgraded to new version")
+			}, "10s", "1s").Should(Equal("0.33.1"), "Expected helm chart to be upgraded to new version")
 		})
 
 		It("it must report failure when helm installation fails", func() {
@@ -395,7 +395,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				},
 				Helm: &kdexv1alpha1.HelmConfig{
 					HostManager: &kdexv1alpha1.HostManagerHelmConfig{
-						Version: "0.2.18",
+						Version: "0.33.0",
 					},
 				},
 			})
@@ -404,7 +404,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 
 			Eventually(func() string {
 				return mockHelmClient.VersionFor(resource.Name)
-			}, "10s", "1s").Should(Equal("0.2.18"))
+			}, "10s", "1s").Should(Equal("0.33.0"))
 
 			// 2. Configure mock to fail next install
 			mockHelmClient.SetFailInstall(true, "upgrade failed")
@@ -415,7 +415,7 @@ var _ = Describe("KDexHost Helm Integration", func() {
 				if err := k8sClient.Get(ctx, types.NamespacedName{Name: resource.Name, Namespace: testNamespace}, latest); err != nil {
 					return err
 				}
-				latest.Spec.Helm.HostManager.Version = "0.2.19"
+				latest.Spec.Helm.HostManager.Version = "0.33.1"
 				return k8sClient.Update(ctx, latest)
 			}, "10s", "1s").Should(Succeed())
 
@@ -440,9 +440,9 @@ var _ = Describe("KDexHost Helm Integration", func() {
 			// or if we expect the controller to do it.
 			// If we want the controller to handle it, we'd need more logic.
 
-			// For now, let's just assert that the version in the mock DID NOT change to 0.2.19
+			// For now, let's just assert that the version in the mock DID NOT change to 0.33.1
 			// because the install failed.
-			Expect(mockHelmClient.VersionFor(resource.Name)).To(Equal("0.2.18"))
+			Expect(mockHelmClient.VersionFor(resource.Name)).To(Equal("0.33.0"))
 		})
 	})
 })

@@ -53,7 +53,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 			// 1. Set initial global default version
 			originalConfig := hostReconciler.GetConfigurationCopy()
 			mutateConfiguration(func(c *configuration.NexusConfiguration) {
-				c.HostDefault.Chart.Version = "1.0.0"
+				c.HostDefault.Chart.Version = "0.40.0"
 			})
 
 			resource := &kdexv1alpha1.KDexHost{
@@ -72,14 +72,14 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 
-			// 2. Verify initial installation with version 1.0.0
+			// 2. Verify initial installation with version 0.40.0
 			Eventually(func() string {
 				return mockHelmClient.VersionFor(resourceName)
-			}, "10s", "500ms").Should(Equal("1.0.0"))
+			}, "10s", "500ms").Should(Equal("0.40.0"))
 
 			// 3. Update the global configuration version
 			mutateConfiguration(func(c *configuration.NexusConfiguration) {
-				c.HostDefault.Chart.Version = "1.1.0"
+				c.HostDefault.Chart.Version = "0.41.0"
 			})
 
 			// 4. Trigger a reconciliation by updating an annotation (does NOT bump generation)
@@ -103,7 +103,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 			// 6. Verify that Helm upgrade was triggered anyway because the configuration hash changed
 			Eventually(func() string {
 				return mockHelmClient.VersionFor(resourceName)
-			}, "10s", "500ms").Should(Equal("1.1.0"), "Expected helm chart to be upgraded to new global default version")
+			}, "10s", "500ms").Should(Equal("0.41.0"), "Expected helm chart to be upgraded to new global default version")
 
 			// Cleanup: restore config
 			hostReconciler.SetConfiguration(originalConfig)

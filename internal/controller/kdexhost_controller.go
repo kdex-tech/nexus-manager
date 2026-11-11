@@ -404,6 +404,10 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	)
 	setReferenceNamespacesCondition(&host)
 
+	if err := r.healClusterReaderSubject(ctx, &host); err != nil {
+		log.Error(err, "failed to ensure the host-manager cluster-reader subject", "host", host.Name, "namespace", host.Namespace)
+	}
+
 	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)

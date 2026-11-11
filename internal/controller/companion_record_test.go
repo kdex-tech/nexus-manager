@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"kdex.dev/crds/configuration"
@@ -28,7 +30,11 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 	if err := configuration.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	objs := make([]client.Object, 0, len(hosts))
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	// The nexus chart ships the cluster-reader binding without subjects.
+	objs := []client.Object{&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}}}
 	for _, h := range hosts {
 		objs = append(objs, h)
 	}
@@ -38,11 +44,14 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	fc := b.Build()
+	config := configuration.LoadConfiguration("/nonexistent-config.yaml", scheme)
+	// Hosts install only a supported host-manager chart.
+	config.HostDefault.Chart.Version = MinHostManagerChartVersion
 	return &KDexHostReconciler{
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
+		Configuration:         config,
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {

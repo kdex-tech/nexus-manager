@@ -199,6 +199,14 @@ var _ = BeforeSuite(func() {
 
 	configuration := configuration.LoadConfiguration("/config.yaml", scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
+	// Hosts install only a supported host-manager chart.
+	configuration.HostDefault.Chart.Version = MinHostManagerChartVersion
+
+	// The nexus chart ships the cluster-reader binding without subjects.
+	Expect(k8sClient.Create(ctx, &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: clusterReaderBindingName},
+	})).To(Succeed())
 
 	// App
 	appReconciler := &KDexAppReconciler{

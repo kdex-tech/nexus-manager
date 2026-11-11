@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -667,8 +666,14 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		return
 	}
 
+	// Likewise refuse a host-manager chart older than the supported minimum.
+	if err := r.checkHostManagerChart(host); err != nil {
+		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+		return
+	}
+
 	// 1. Reconcile kdex-host-manager chart
-	if r.haltHelmRun(ctx, namespace, name, hash, r.reconcileHostManagerChart(c, host, proceed), log) {
+	if r.haltHelmRun(ctx, namespace, name, hash, r.reconcileHostManagerChart(ctx, c, host, proceed), log) {
 		return
 	}
 
@@ -867,6 +872,10 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 		if errors.As(err, &refused) {
 			reason = ConditionReasonCompanionChartRefused
 		}
+		var unsupported *hostManagerChartUnsupportedError
+		if errors.As(err, &unsupported) {
+			reason = ConditionReasonHostManagerChartUnsupported
+		}
 		kdexv1alpha1.SetConditions(
 			&host.Status.Conditions,
 			kdexv1alpha1.ConditionStatuses{
@@ -896,14 +905,31 @@ func setHelmOutcome(host *kdexv1alpha1.KDexHost, hash, controllerID string, err 
 
 // reconcileHostManagerChart installs or upgrades the host's own release,
 // asking proceed once its chart is in hand.
-func (r *KDexHostReconciler) reconcileHostManagerChart(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, proceed func() error) error {
+func (r *KDexHostReconciler) reconcileHostManagerChart(ctx context.Context, helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, proceed func() error) error {
 	spec, err := r.buildHostManagerChartSpec(host)
 	if err != nil {
 		return err
 	}
 	spec.Proceed = proceed
 
-	return helmClient.InstallOrUpgrade(spec)
+	if err := helmClient.InstallOrUpgrade(spec); err != nil {
+		return err
+	}
+
+	// The chart now exists, and with it the ServiceAccount host-manager runs
+	// as: let it read cluster-scoped objects.
+	return r.ensureClusterReaderSubject(ctx, host.Namespace, hostManagerServiceAccountName(spec.Values, host.Name))
+}
+
+// checkHostManagerChart refuses a host whose effective host-manager chart
+// version (per-host pin over the cluster default) is below the supported
+// minimum. It runs before any Helm call.
+func (r *KDexHostReconciler) checkHostManagerChart(host *kdexv1alpha1.KDexHost) error {
+	spec, err := r.buildHostManagerChartSpec(host)
+	if err != nil {
+		return err
+	}
+	return checkHostManagerChartVersion(spec.Version)
 }
 
 // buildHostManagerChartSpec computes exactly what will be handed to Helm for
@@ -976,17 +1002,6 @@ func (r *KDexHostReconciler) buildHostManagerChartSpec(host *kdexv1alpha1.KDexHo
 	// later opt-in; a non-empty spec list is reported by
 	// setReferenceNamespacesCondition.
 	vals["referenceNamespaces"] = []any{}
-
-	hostManagerClusterRole := os.Getenv("HOST_MANAGER_CLUSTER_ROLE")
-
-	roleRef := map[string]string{}
-	roleRef["apiGroup"] = "rbac.authorization.k8s.io"
-	roleRef["kind"] = "ClusterRole"
-
-	// If the result of roleRef.name is blank the host-manager chart creates it's own ClusterRole
-	roleRef["name"] = hostManagerClusterRole
-
-	vals["roleRef"] = roleRef
 
 	return &utils.ChartSpec{
 		ReleaseName: host.Name,

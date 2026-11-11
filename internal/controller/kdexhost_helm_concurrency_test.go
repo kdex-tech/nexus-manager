@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -65,7 +66,10 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		t.Fatalf("add configuration scheme: %v", err)
 	}
 
-	objs := make([]client.Object, 0, numHosts)
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add rbac scheme: %v", err)
+	}
+	objs := []client.Object{&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}}}
 	for i := 0; i < numHosts; i++ {
 		objs = append(objs, &kdexv1alpha1.KDexHost{
 			ObjectMeta: metav1.ObjectMeta{
@@ -92,7 +96,7 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
+		Configuration:         supportedChartConfiguration(scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: limit,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
@@ -177,7 +181,10 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		t.Fatalf("add configuration scheme: %v", err)
 	}
 
-	objs := make([]client.Object, 0, numHosts)
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add rbac scheme: %v", err)
+	}
+	objs := []client.Object{&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}}}
 	for i := range numHosts {
 		objs = append(objs, &kdexv1alpha1.KDexHost{
 			ObjectMeta: metav1.ObjectMeta{
@@ -208,7 +215,7 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		Client:                fc,
 		ControllerID:          "test",
 		Ctx:                   context.Background(),
-		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
+		Configuration:         supportedChartConfiguration(scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
 		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
@@ -240,4 +247,12 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		t.Error("no render overlapped a prune: the render slot is being held across the prune, " +
 			"so one stuck uninstall stalls the whole fleet")
 	}
+}
+
+// supportedChartConfiguration is the default configuration with a host-manager
+// chart version the operator will install.
+func supportedChartConfiguration(scheme *runtime.Scheme) configuration.NexusConfiguration {
+	c := configuration.LoadConfiguration("/nonexistent-config.yaml", scheme)
+	c.HostDefault.Chart.Version = MinHostManagerChartVersion
+	return c
 }
