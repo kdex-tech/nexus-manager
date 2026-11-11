@@ -26,7 +26,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
 				return mockHelmClient, nil
 			}
 

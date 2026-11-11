@@ -131,6 +131,33 @@ func WithRegistryFetchMaxBytes(n int64) HelmClientOption {
 	return func(h *HelmClient) { h.maxFetchBytes = n }
 }
 
+// InstallerServiceAccountName is the per-namespace ServiceAccount nexus
+// impersonates to install a host's charts. It must equal the host-manager
+// constant of the same name (kdex-host-manager
+// internal/controller/reserved_service_accounts.go).
+const InstallerServiceAccountName = "kdex-installer"
+
+// InstallerUser is the impersonation user for a namespace's installer.
+func InstallerUser(namespace string) string {
+	return "system:serviceaccount:" + namespace + ":" + InstallerServiceAccountName
+}
+
+// HelmIdentity names who a Helm client acts as.
+type HelmIdentity int
+
+const (
+	// HelmAsInstaller acts as the namespace's kdex-installer ServiceAccount.
+	HelmAsInstaller HelmIdentity = iota
+	// HelmAsOperator acts as nexus's own identity.
+	HelmAsOperator
+)
+
+// WithImpersonation makes the client act as user. It is applied before the
+// action configuration is initialised, which captures the REST getter.
+func WithImpersonation(user string) HelmClientOption {
+	return func(h *HelmClient) { h.settings.KubeAsUser = user }
+}
+
 // registryLimits is defaultRegistryFetchLimits, with the client's byte budget.
 func (h *HelmClient) registryLimits() registryFetchLimits {
 	limits := defaultRegistryFetchLimits
@@ -152,6 +179,17 @@ func NewHelmClient(
 	settings := cli.New()
 	settings.SetNamespace(namespace)
 
+	h := &HelmClient{
+		log:       logger,
+		namespace: namespace,
+		secrets:   secrets,
+		settings:  settings,
+	}
+	// Options may touch settings, which Init reads: apply them first.
+	for _, opt := range opts {
+		opt(h)
+	}
+
 	actionConfig := action.NewConfiguration(
 		action.ConfigurationSetLogger(logr.ToSlogHandler(logger)))
 
@@ -169,16 +207,7 @@ func NewHelmClient(
 		return nil, fmt.Errorf("failed to init action config: %w", err)
 	}
 
-	h := &HelmClient{
-		actionConfig: actionConfig,
-		log:          logger,
-		namespace:    namespace,
-		secrets:      secrets,
-		settings:     settings,
-	}
-	for _, opt := range opts {
-		opt(h)
-	}
+	h.actionConfig = actionConfig
 	return h, nil
 }
 

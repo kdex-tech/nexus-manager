@@ -101,7 +101,7 @@ type KDexHostReconciler struct {
 	ControllerID      string
 	Ctx               context.Context
 	Configuration     configuration.NexusConfiguration
-	HelmClientFactory func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error)
+	HelmClientFactory func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error)
 	RequeueDelay      time.Duration
 	Scheme            *runtime.Scheme
 
@@ -307,6 +307,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				host.Namespace,
 				secrets,
 				log.WithName("helm"),
+				utils.HelmAsOperator,
 			)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -896,8 +897,8 @@ func (r *KDexHostReconciler) createOrUpdateInternalHostResource(
 // helmClientKey names a host's cached Helm client. A name cannot contain "/",
 // so no two hosts share a key; joined by "-", host "a-b" in "c" and host "a"
 // in "b-c" did, and one got a client bound to the other's namespace.
-func helmClientKey(name, namespace string) string {
-	return namespace + "/" + name
+func helmClientKey(name, namespace string, identity utils.HelmIdentity) string {
+	return fmt.Sprintf("%s/%s/%d", namespace, name, identity)
 }
 
 func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) error {
@@ -908,12 +909,13 @@ func (r *KDexHostReconciler) deleteHelmClient(name string, namespace string) err
 		r.helmClients = map[string]cachedHelmClient{}
 	}
 
-	delete(r.helmClients, helmClientKey(name, namespace))
+	delete(r.helmClients, helmClientKey(name, namespace, utils.HelmAsInstaller))
+	delete(r.helmClients, helmClientKey(name, namespace, utils.HelmAsOperator))
 
 	return nil
 }
 
-func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -921,7 +923,7 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 		r.helmClients = map[string]cachedHelmClient{}
 	}
 
-	key := helmClientKey(name, namespace)
+	key := helmClientKey(name, namespace, identity)
 	hash := utils.HashSecrets(secrets)
 
 	cached, ok := r.helmClients[key]
@@ -930,7 +932,7 @@ func (r *KDexHostReconciler) getOrCreateHelmClient(name string, namespace string
 	// secrets have changed (e.g. registry credential rotation). Reusing a stale
 	// client would keep installing/upgrading charts with dead credentials.
 	if !ok || cached.hash != hash {
-		helmClient, err := r.HelmClientFactory(namespace, secrets, logger)
+		helmClient, err := r.HelmClientFactory(namespace, secrets, logger, identity)
 		if err != nil {
 			return nil, err
 		}

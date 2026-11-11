@@ -29,7 +29,7 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
 			mockHelmClient = &MockHelmClient{}
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
 				return mockHelmClient, nil
 			}
 
@@ -42,7 +42,7 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 
 		AfterEach(func() {
 			originalConfig.restore()
-			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			hostReconciler.HelmClientFactory = func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
 				return &MockHelmClient{}, nil
 			}
 			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}

@@ -95,7 +95,7 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: limit,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
 			return mock, nil
 		},
 	}
@@ -211,7 +211,7 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
 			return mock, nil
 		},
 	}

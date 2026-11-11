@@ -74,7 +74,7 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 		Ctx:           context.Background(),
 		Configuration: configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:        scheme,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
 			return &stuckUninstallHelmClient{}, nil
 		},
 	}

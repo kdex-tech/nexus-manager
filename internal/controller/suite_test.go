@@ -219,7 +219,7 @@ var _ = BeforeSuite(func() {
 		Configuration: configuration,
 		RequeueDelay:  0,
 		Scheme:        k8sManager.GetScheme(),
-		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(namespace string, serviceAccountSecrets kdexv1alpha1.Secrets, logger logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
 			return &MockHelmClient{}, nil
 		},
 	}

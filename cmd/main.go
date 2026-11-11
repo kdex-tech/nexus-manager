@@ -297,8 +297,12 @@ func main() {
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,
-		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
-			return utils.NewHelmClient(namespace, secrets, logger, utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes))
+		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
+			opts := []utils.HelmClientOption{utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes)}
+			if identity == utils.HelmAsInstaller {
+				opts = append(opts, utils.WithImpersonation(utils.InstallerUser(namespace)))
+			}
+			return utils.NewHelmClient(namespace, secrets, logger, opts...)
 		},
 		HelmRenderConcurrency: helmRenderConcurrency,
 		RequeueDelay:          requeueDelay,

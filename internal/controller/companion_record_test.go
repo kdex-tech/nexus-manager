@@ -45,7 +45,7 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
 			return mock, nil
 		},
 	}, fc
