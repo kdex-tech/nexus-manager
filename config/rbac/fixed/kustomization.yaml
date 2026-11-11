@@ -1,0 +1,7 @@
+# Fixed-name roles: deliberately no namePrefix, so the names match the
+# resourceNames granted to the manager role and the chart's literal names.
+resources:
+- installer_role.yaml
+- installer_base_role.yaml
+- cluster_reader_role.yaml
+- cluster_reader_role_binding.yaml

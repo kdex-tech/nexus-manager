@@ -9,6 +9,7 @@ namespace: kdex-nexus-system
 
 resources:
 - ../rbac
+- ../rbac/fixed
 - ../manager
 - ../webhook
 - ../certmanager

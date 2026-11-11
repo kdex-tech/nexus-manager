@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -26,8 +27,11 @@ type rbacObject struct {
 	} `json:"metadata"`
 	Rules           []rbacRule `json:"rules"`
 	AggregationRule any        `json:"aggregationRule"`
-	RoleRef         any        `json:"roleRef"`
-	Subjects        any        `json:"subjects"`
+	RoleRef         struct {
+		APIGroup string `json:"apiGroup"`
+		Kind     string `json:"kind"`
+		Name     string `json:"name"`
+	} `json:"roleRef"`
 }
 
 const repoRoot = "../.."
@@ -68,6 +72,11 @@ func rbacFiles(t *testing.T) map[string]rbacObject {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixed, err := filepath.Glob(filepath.Join(repoRoot, "config/rbac/fixed/*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, fixed...)
 	out := map[string]rbacObject{}
 	for _, f := range files {
 		if filepath.Base(f) == "kustomization.yaml" {
@@ -94,28 +103,46 @@ func TestChartRBACMatchesConfig(t *testing.T) {
 		for what, pair := range map[string][2]any{
 			"rules":           {got.Rules, want.Rules},
 			"aggregationRule": {got.AggregationRule, want.AggregationRule},
-			"roleRef":         {got.RoleRef, want.RoleRef},
-			"subjects":        {got.Subjects, want.Subjects},
 		} {
-			g, _ := yaml.Marshal(pair[0])
-			w, _ := yaml.Marshal(pair[1])
-			// Role names differ by prefix (kustomize namePrefix vs Helm fullname); roleRef
-			// names are therefore compared only for the fixed cluster-reader binding below.
-			// Subjects are templated in the chart (SA name/namespace), so only the
-			// fixed cluster-reader binding's (operator-maintained) list is compared.
-			if what == "roleRef" || (what == "subjects" && name != "cluster_reader_role_binding.yaml") {
-				continue
+			g, gerr := yaml.Marshal(pair[0])
+			w, werr := yaml.Marshal(pair[1])
+			if gerr != nil || werr != nil {
+				t.Fatalf("%s: marshal %s: %v %v", name, what, gerr, werr)
 			}
 			if string(g) != string(w) {
 				t.Errorf("%s: chart %s differ from config:\nchart:\n%s\nconfig:\n%s", name, what, g, w)
 			}
 		}
-		for _, k := range []string{"app.kubernetes.io/managed-by", "kdex.dev/aggregate-to-installer"} {
-			if strings.HasPrefix(name, "installer") || strings.HasPrefix(name, "cluster_reader") {
-				if got.Metadata.Labels[k] != want.Metadata.Labels[k] {
-					t.Errorf("%s: label %s chart=%q config=%q", name, k, got.Metadata.Labels[k], want.Metadata.Labels[k])
-				}
+		// roleRef apiGroup/kind always; the name only for the fixed-name binding
+		// (other bindings name a templated/prefixed role, stripped from the chart copy).
+		if got.RoleRef.APIGroup != want.RoleRef.APIGroup || got.RoleRef.Kind != want.RoleRef.Kind {
+			t.Errorf("%s: roleRef chart=%+v config=%+v", name, got.RoleRef, want.RoleRef)
+		}
+		if name == "cluster_reader_role_binding.yaml" && got.RoleRef.Name != want.RoleRef.Name {
+			t.Errorf("%s: roleRef name chart=%q config=%q", name, got.RoleRef.Name, want.RoleRef.Name)
+		}
+		if strings.HasPrefix(name, "installer") || strings.HasPrefix(name, "cluster_reader") {
+			if got.Metadata.Name != want.Metadata.Name {
+				t.Errorf("%s: fixed name chart=%q config=%q", name, got.Metadata.Name, want.Metadata.Name)
 			}
+			k := "kdex.dev/aggregate-to-installer"
+			if got.Metadata.Labels[k] != want.Metadata.Labels[k] {
+				t.Errorf("%s: label %s chart=%q config=%q", name, k, got.Metadata.Labels[k], want.Metadata.Labels[k])
+			}
+		}
+	}
+}
+
+// The cluster-reader binding's subjects are maintained at runtime by nexus; a
+// declared (even empty) list would be reset on every chart upgrade (atomic list).
+func TestClusterReaderBindingDeclaresNoSubjects(t *testing.T) {
+	for _, f := range []string{"config/rbac/fixed/cluster_reader_role_binding.yaml", "chart/templates/rbac/cluster_reader_role_binding.yaml"} {
+		b, err := os.ReadFile(filepath.Join(repoRoot, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regexp.MustCompile(`(?m)^subjects:`).Match(b) {
+			t.Errorf("%s declares subjects", f)
 		}
 	}
 }
@@ -147,7 +174,10 @@ func TestClusterReaderCoversClusterScopedKDexKinds(t *testing.T) {
 	}
 	checked := 0
 	for _, f := range files {
-		b, _ := os.ReadFile(f)
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var crd struct {
 			Spec struct {
 				Scope string `json:"scope"`

@@ -3,11 +3,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    app.kubernetes.io/instance: {{ .Release.Name }}
-    app.kubernetes.io/managed-by: kcnas-operator
-    app.kubernetes.io/name: {{ include "kcnas-operator.name" . }}
-    helm.sh/chart: {{ include "kcnas-operator.chart" . }}
-  name: {{ include "kcnas-operator.fullname" . }}-installer
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: kcnas-operator-installer
 aggregationRule:
   clusterRoleSelectors:
   - matchLabels:
