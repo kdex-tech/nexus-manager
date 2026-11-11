@@ -70,6 +70,16 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// Default bounds on a chart archive (see --chart-max-decompressed-bytes and
+// --chart-max-file-bytes). A host-manager chart is tens of KiB, and a chart
+// larger than ~3MiB decompressed could not be stored anyway: Helm keeps each
+// revision -- chart included, gzipped and base64-encoded -- in one release
+// Secret, which the API server caps at 1MiB.
+const (
+	defaultChartMaxDecompressedBytes = 4 << 20
+	defaultChartMaxFileBytes         = 1 << 20
+)
+
 // applyChartSizeLimits sets Helm's process-wide bounds on a chart archive's
 // decompressed size and on its largest file. Helm reads them as package
 // variables on every load, so this is set once, at startup.
@@ -110,14 +120,18 @@ func main() {
 		"A companion chart is tenant input, and Helm holds what it reads in memory -- tag listings at about nine times "+
 		"their size -- so this bounds what a registry can make the operator allocate. Raising it needs the memory limit "+
 		"raised to match. Must be positive.")
-	flag.Int64Var(&chartMaxDecompressedBytes, "chart-max-decompressed-bytes", 16<<20, "Maximum decompressed size of one "+
-		"chart archive. A companion chart is tenant input, and a small archive can expand enormously, so Helm's own "+
-		"100MiB default is far above what a real chart needs. Helm holds the decompressed chart in memory and "+
-		"rendering multiplies it, so the budget rule is: this cap x the render overhead x --helm-render-concurrency must "+
-		"fit the memory limit. Raising it needs the memory limit raised to match. Must be positive.")
-	flag.Int64Var(&chartMaxFileBytes, "chart-max-file-bytes", 4<<20, "Maximum decompressed size of any one file in a "+
-		"chart archive. Same budget rule as --chart-max-decompressed-bytes: the cap x the render overhead x "+
-		"--helm-render-concurrency must fit the memory limit. Must be positive.")
+	flag.Int64Var(&chartMaxDecompressedBytes, "chart-max-decompressed-bytes", defaultChartMaxDecompressedBytes,
+		"Maximum decompressed size of one chart archive. A companion chart is tenant input, and a small archive can "+
+			"expand enormously, so Helm's own 100MiB default is far above what a real chart needs. The budget is not one "+
+			"chart: every upgrade and uninstall decodes every retained revision of the release at once -- up to Helm's "+
+			"history limit, 10 -- each with its chart, so the memory a release can cost is about this cap x 2-3 (render "+
+			"and decode overhead) x 10, and renders multiply that by --helm-render-concurrency; it must fit the memory "+
+			"limit. A chart larger than ~3MiB decompressed cannot be stored in the 1MiB release Secret anyway. Raising "+
+			"it needs the memory limit raised to match. Must be positive.")
+	flag.Int64Var(&chartMaxFileBytes, "chart-max-file-bytes", defaultChartMaxFileBytes, "Maximum decompressed size of "+
+		"any one file in a chart archive. Same budget as --chart-max-decompressed-bytes: the cap x 2-3 x the 10 "+
+		"retained revisions Helm decodes at once on an upgrade or uninstall, x --helm-render-concurrency, must fit the "+
+		"memory limit. Must be positive.")
 	flag.Float64Var(&memoryLimitRatio, "memory-limit-ratio", 0.9, "Fraction of the container's cgroup memory limit to "+
 		"install as Go's soft memory limit (GOMEMLIMIT), so the garbage collector applies backpressure before the kernel "+
 		"OOMKills the process. This is the last-resort safety net under the bound set by --helm-render-concurrency: "+
