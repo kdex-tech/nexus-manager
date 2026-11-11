@@ -656,7 +656,7 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		host.Namespace,
 		secrets,
 		log.WithName("helm"),
-		utils.HelmAsOperator,
+		utils.HelmAsInstaller,
 	)
 	if err != nil {
 		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
@@ -674,6 +674,13 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 	// Likewise refuse a host-manager chart older than the supported minimum.
 	if err := r.checkHostManagerChart(host); err != nil {
 		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)
+		return
+	}
+
+	// Every Helm action below impersonates the namespace's installer, so
+	// bootstrap it first. In a terminating namespace it creates nothing and
+	// stops the run as a terminating host does: teardown is next.
+	if r.haltHelmRun(ctx, namespace, name, hash, r.ensureInstaller(ctx, namespace), log) {
 		return
 	}
 

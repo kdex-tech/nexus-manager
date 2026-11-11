@@ -2,7 +2,9 @@ package controller
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -31,11 +33,24 @@ const SecretTypeHelmRelease = "helm.sh/release.v1"
 // `type` is one of the few field selectors kube-apiserver registers for
 // v1.Secret, so this is served server-side and the excluded objects never reach
 // the client.
+//
+// The RBAC kinds the operator manages are scoped the same way, so none of them
+// gets a cluster-wide informer: ServiceAccounts and RoleBindings to what the
+// operator created itself (the namespaces' installers, labelled
+// LabelManagedBy=ManagedByOperator), and ClusterRoleBindings to the one
+// cluster-reader binding, by name -- the nexus chart ships it, and Helm sets
+// managed-by on every chart object, so a label selector would never match it.
 func CacheOptions() cache.Options {
+	managedByOperator := labels.SelectorFromSet(labels.Set{LabelManagedBy: ManagedByOperator})
 	return cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
 			&corev1.Secret{}: {
 				Field: fields.OneTermNotEqualSelector("type", SecretTypeHelmRelease),
+			},
+			&corev1.ServiceAccount{}: {Label: managedByOperator},
+			&rbacv1.RoleBinding{}:    {Label: managedByOperator},
+			&rbacv1.ClusterRoleBinding{}: {
+				Field: fields.OneTermEqualSelector("metadata.name", clusterReaderBindingName),
 			},
 		},
 	}

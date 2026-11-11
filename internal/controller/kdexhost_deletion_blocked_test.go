@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,6 +49,12 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 	if err := configuration.AddToScheme(scheme); err != nil {
 		t.Fatalf("add configuration scheme: %v", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add rbac scheme: %v", err)
+	}
 
 	now := metav1.Now()
 	host := &kdexv1alpha1.KDexHost{
@@ -64,7 +72,7 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 	}
 
 	fc := withTeardownIndexes(fake.NewClientBuilder().WithScheme(scheme)).
-		WithObjects(host).
+		WithObjects(host, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}).
 		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
 		Build()
 

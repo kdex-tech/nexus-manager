@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -87,16 +88,24 @@ func (r *KDexHostReconciler) ensureClusterReaderSubject(ctx context.Context, nam
 }
 
 // removeClusterReaderSubject removes the ServiceAccount from the fixed
-// cluster-reader ClusterRoleBinding. Idempotent.
+// cluster-reader ClusterRoleBinding. Idempotent. A missing binding holds no
+// subject, so there is nothing to remove: a teardown must not wedge on it.
 func (r *KDexHostReconciler) removeClusterReaderSubject(ctx context.Context, namespace, sa string) error {
 	subject := rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: sa, Namespace: namespace}
-	return r.updateClusterReaderSubjects(ctx, func(subjects []rbacv1.Subject) ([]rbacv1.Subject, bool) {
+	err := r.updateClusterReaderSubjects(ctx, func(subjects []rbacv1.Subject) ([]rbacv1.Subject, bool) {
 		if !slices.Contains(subjects, subject) {
 			return subjects, false
 		}
 		return slices.DeleteFunc(slices.Clone(subjects), func(s rbacv1.Subject) bool { return s == subject }), true
 	})
+	if errors.Is(err, errClusterReaderBindingMissing) {
+		return nil
+	}
+	return err
 }
+
+// errClusterReaderBindingMissing is the cluster-reader binding not found.
+var errClusterReaderBindingMissing = errors.New("ClusterRoleBinding " + clusterReaderBindingName + " not found: the nexus-manager chart that ships it is too old")
 
 // updateClusterReaderSubjects is the optimistic-lock read-modify-update of
 // the binding's subjects. The binding is owned by the nexus chart: when it is
@@ -109,7 +118,7 @@ func (r *KDexHostReconciler) updateClusterReaderSubjects(ctx context.Context, mo
 		binding := &rbacv1.ClusterRoleBinding{}
 		if err := r.reader().Get(ctx, key, binding); err != nil {
 			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("ClusterRoleBinding %q not found: the nexus-manager chart that ships it is too old", clusterReaderBindingName)
+				return errClusterReaderBindingMissing
 			}
 			return err
 		}

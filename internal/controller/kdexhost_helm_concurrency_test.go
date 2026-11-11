@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -69,7 +70,13 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 	if err := rbacv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add rbac scheme: %v", err)
 	}
-	objs := []client.Object{&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}}}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	objs := []client.Object{
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+	}
 	for i := 0; i < numHosts; i++ {
 		objs = append(objs, &kdexv1alpha1.KDexHost{
 			ObjectMeta: metav1.ObjectMeta{
@@ -184,7 +191,13 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 	if err := rbacv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add rbac scheme: %v", err)
 	}
-	objs := []client.Object{&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}}}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	objs := []client.Object{
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+	}
 	for i := range numHosts {
 		objs = append(objs, &kdexv1alpha1.KDexHost{
 			ObjectMeta: metav1.ObjectMeta{

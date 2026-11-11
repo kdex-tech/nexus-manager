@@ -322,45 +322,12 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 				return ctrl.Result{RequeueAfter: r.RequeueDelay}, nil
 			}
 
-			c, err := r.getOrCreateHelmClient(
-				host.Name,
-				host.Namespace,
-				secrets,
-				log.WithName("helm"),
-				utils.HelmAsOperator,
-			)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-
-			// Both uninstalls are attempted before any failure is acted on, so
-			// one blocked release does not strand the others. But a failure
-			// MUST keep the finalizer: releasing it here would delete the CR
-			// while its releases are still running, leaving them with nothing
-			// left in the cluster that references them. Requeue instead and let
-			// the next pass retry -- uninstalling a release that is already
-			// gone succeeds, so the retry stalls only on what still fails.
-			var uninstallErrs []error
-
-			// Uninstall host manager chart
-			if err := c.Uninstall(host.Name); err != nil {
-				log.Error(err, "failed to uninstall host manager release", "name", host.Name)
-				uninstallErrs = append(uninstallErrs, err)
-			}
-
-			// Uninstall companion charts: everything this host owns, not only
-			// what it still declares, so a companion dropped in the same edit
-			// that deleted the host cannot outlive the CR.
-			hostReleases, err := r.kdexHostNames(ctx, host.Namespace)
-			if err == nil {
-				err = r.uninstallCompanionCharts(c, &host, hostReleases, log)
-			}
-			if err != nil {
-				log.Error(err, "failed to uninstall companion releases", "host", host.Name)
-				uninstallErrs = append(uninstallErrs, err)
-			}
-
-			if err := errors.Join(uninstallErrs...); err != nil {
+			// Each step below is idempotent, and a failure keeps the finalizer
+			// for the next pass to retry. Releasing it early would delete the
+			// CR while what it owns -- releases, the cluster-reader subject,
+			// the namespace's installer -- is still there, with nothing left
+			// in the cluster that references it.
+			if err := r.teardownHost(ctx, &host, secrets, log); err != nil {
 				// Keeping the finalizer is correct, but it leaves the host in
 				// Terminating with no visible reason -- and a terminating
 				// object is exactly when an operator has the fewest places to
@@ -374,7 +341,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 						Ready:       metav1.ConditionFalse,
 					},
 					kdexv1alpha1.ConditionReasonReconcileError,
-					fmt.Sprintf("Deletion is blocked: %v. The finalizer is held until every release is gone.", err),
+					fmt.Sprintf("Deletion is blocked: %v. The finalizer is held until the teardown completes.", err),
 				)
 				return ctrl.Result{}, err
 			}
