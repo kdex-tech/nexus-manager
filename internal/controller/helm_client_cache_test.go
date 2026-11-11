@@ -43,7 +43,7 @@ func secretsWithPassword(resourceVersion, pw string) kdexv1alpha1.Secrets {
 func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 	var calls int
 	r := &KDexHostReconciler{
-		HelmClientFactory: func(_ string, _ kdexv1alpha1.Secrets, _ logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(_ string, _ kdexv1alpha1.Secrets, _ logr.Logger) (utils.HelmClientInterface, error) {
 			calls++
 			return &stubHelmClient{id: calls}, nil
 		},
@@ -51,7 +51,7 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 
 	old := secretsWithPassword("1", "old-password")
 
-	c1, err := r.getOrCreateHelmClient("host", "ns", old, logr.Discard(), utils.HelmAsOperator)
+	c1, err := r.getOrCreateHelmClient("host", "ns", old, logr.Discard())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 
 	// Same secrets, read again -> cached client is reused, factory not called
 	// again. Every reconcile reads a fresh copy of the host's Secrets.
-	c1b, err := r.getOrCreateHelmClient("host", "ns", secretsWithPassword("1", "old-password"), logr.Discard(), utils.HelmAsOperator)
+	c1b, err := r.getOrCreateHelmClient("host", "ns", secretsWithPassword("1", "old-password"), logr.Discard())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 	// Rotated credentials -> a fresh client must be built. Updating the
 	// Secret bumped its resourceVersion.
 	rotated := secretsWithPassword("2", "new-password")
-	c2, err := r.getOrCreateHelmClient("host", "ns", rotated, logr.Discard(), utils.HelmAsOperator)
+	c2, err := r.getOrCreateHelmClient("host", "ns", rotated, logr.Discard())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -93,17 +93,17 @@ func TestGetOrCreateHelmClientRefreshesOnSecretChange(t *testing.T) {
 func TestGetOrCreateHelmClientKeepsHostsInDifferentNamespacesApart(t *testing.T) {
 	var namespaces []string
 	r := &KDexHostReconciler{
-		HelmClientFactory: func(namespace string, _ kdexv1alpha1.Secrets, _ logr.Logger, _ utils.HelmIdentity) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(namespace string, _ kdexv1alpha1.Secrets, _ logr.Logger) (utils.HelmClientInterface, error) {
 			namespaces = append(namespaces, namespace)
 			return &stubHelmClient{id: len(namespaces)}, nil
 		},
 	}
 
-	first, err := r.getOrCreateHelmClient("a-b", "c", nil, logr.Discard(), utils.HelmAsOperator)
+	first, err := r.getOrCreateHelmClient("a-b", "c", nil, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := r.getOrCreateHelmClient("a", "b-c", nil, logr.Discard(), utils.HelmAsOperator)
+	second, err := r.getOrCreateHelmClient("a", "b-c", nil, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,36 +112,16 @@ func TestGetOrCreateHelmClientKeepsHostsInDifferentNamespacesApart(t *testing.T)
 	}
 }
 
-// The installer and operator identities act with different privileges, so one
-// host must never be handed the other identity's cached client.
-func TestHelmClientCache_SeparatePerIdentity(t *testing.T) {
-	var seen []utils.HelmIdentity
+// deleteHelmClient forgets a host's cached client.
+func TestHelmClientCache_DeleteForgetsTheHost(t *testing.T) {
 	r := &KDexHostReconciler{
-		HelmClientFactory: func(_ string, _ kdexv1alpha1.Secrets, _ logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
-			seen = append(seen, identity)
-			return &stubHelmClient{id: len(seen)}, nil
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
+			return &stubHelmClient{}, nil
 		},
 	}
-
-	inst, err := r.getOrCreateHelmClient("host", "ns", nil, logr.Discard(), utils.HelmAsInstaller)
-	if err != nil {
+	if _, err := r.getOrCreateHelmClient("host", "ns", nil, logr.Discard()); err != nil {
 		t.Fatal(err)
 	}
-	op, err := r.getOrCreateHelmClient("host", "ns", nil, logr.Discard(), utils.HelmAsOperator)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inst == op {
-		t.Fatal("installer and operator share a cached client")
-	}
-	if len(seen) != 2 || seen[0] != utils.HelmAsInstaller || seen[1] != utils.HelmAsOperator {
-		t.Fatalf("factory saw identities %v", seen)
-	}
-	again, _ := r.getOrCreateHelmClient("host", "ns", nil, logr.Discard(), utils.HelmAsInstaller)
-	if again != inst {
-		t.Fatal("same identity was not served from cache")
-	}
-
 	if err := r.deleteHelmClient("host", "ns"); err != nil {
 		t.Fatal(err)
 	}
@@ -150,5 +130,6 @@ func TestHelmClientCache_SeparatePerIdentity(t *testing.T) {
 	}
 }
 
-// ReleaseObjects: no record lists anything outside its namespace.
-func (s *stubHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) { return nil, nil }
+func (s *stubHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
+
+func (s *stubHelmClient) DropClusterRBACFromRecord(string) ([]string, error) { return nil, nil }

@@ -322,15 +322,12 @@ func main() {
 		Configuration: conf,
 		ControllerID:  hostname,
 		Ctx:           ctx,
-		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
-			opts := []utils.HelmClientOption{utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes),
-				utils.WithMetadataReader(mgr.GetAPIReader())}
-			if identity == utils.HelmAsInstaller {
-				opts = append(opts, utils.WithImpersonation(utils.InstallerUser(namespace)))
-			}
-			// Both identities act on the manager's own REST config: the
-			// installer impersonating on it, the operator as it is.
-			return utils.NewHelmClient(namespace, mgr.GetConfig(), secrets, logger, opts...)
+		// Every Helm client impersonates its namespace's installer on the
+		// manager's own REST config: there is no other identity.
+		HelmClientFactory: func(namespace string, secrets kdexv1alpha1.Secrets, logger logr.Logger) (utils.HelmClientInterface, error) {
+			return utils.NewHelmClient(namespace, mgr.GetConfig(), secrets, logger,
+				utils.WithRegistryFetchMaxBytes(registryFetchMaxBytes),
+				utils.WithMetadataReader(mgr.GetAPIReader()))
 		},
 		HelmRenderConcurrency: helmRenderConcurrency,
 		RequeueDelay:          requeueDelay,

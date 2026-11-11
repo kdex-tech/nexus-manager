@@ -33,8 +33,14 @@ type MockHelmClient struct {
 	// persisted onto the storage Secret, merged (not replaced) on upgrade,
 	// and read back by List for selector matching. Keyed by release name.
 	releaseLabels map[string]map[string]string
-	// releaseObjects models what each release's record lists (ReleaseObjects).
-	releaseObjects map[string][]utils.ReleaseObject
+	// records models what each release's latest revision lists, as far as
+	// an installer's uninstall of it cares; nil is a record it can uninstall.
+	records map[string][]recordDoc
+	// statuses models each release's latest revision's status; an existing
+	// release with none is "deployed".
+	statuses map[string]string
+	// rewrites counts DropClusterRBACFromRecord calls per release.
+	rewrites map[string]int
 
 	failList bool
 	// failUninstall names releases whose Uninstall returns an error.
@@ -129,31 +135,115 @@ func (m *MockHelmClient) Uninstall(releaseName string) error {
 	if _, exists := m.releaseLabels[releaseName]; !exists {
 		return nil
 	}
+	// Every client acts as the installer: a record listing anything it may
+	// not delete fails the uninstall, Forbidden, and stays.
+	for _, d := range m.records[releaseName] {
+		if !d.installerDeletable() {
+			return fmt.Errorf("failed to uninstall release %s: %s %q is forbidden to %s", releaseName, d.Kind, d.Name, mockInstaller)
+		}
+	}
 	m.uninstalledCharts = append(m.uninstalledCharts, releaseName)
 	delete(m.releaseLabels, releaseName)
-	delete(m.releaseObjects, releaseName)
+	delete(m.records, releaseName)
+	delete(m.statuses, releaseName)
 	return nil
 }
 
-// ReleaseObjects lists what the release's record holds: nothing for a release
-// that does not exist.
-func (m *MockHelmClient) ReleaseObjects(releaseName string) ([]utils.ReleaseObject, error) {
+// mockInstaller is the installer every mock client acts as.
+const mockInstaller = "system:serviceaccount:ns:kdex-installer"
+
+// recordDoc is one document of a release record, as far as an installer's
+// uninstall of it cares.
+type recordDoc struct {
+	Kind, Name string
+	// Namespace is as the manifest states it: empty for the release's own.
+	Namespace     string
+	ClusterScoped bool
+	// List marks a list-typed document, which an uninstall flattens.
+	List bool
+}
+
+// installerDeletable reports whether the namespace's installer may delete
+// what d names: a namespaced object in its own namespace ("ns"), not a list.
+func (d recordDoc) installerDeletable() bool {
+	return !d.ClusterScoped && !d.List && (d.Namespace == "" || d.Namespace == "ns")
+}
+
+// clusterRBACOrList reports whether DropClusterRBACFromRecord drops d.
+func (d recordDoc) clusterRBACOrList() bool {
+	return d.List || d.Kind == "ClusterRole" || d.Kind == "ClusterRoleBinding"
+}
+
+// ReleaseStatus is the release's recorded status: "" for a release that does
+// not exist, "deployed" for one with none set.
+func (m *MockHelmClient) ReleaseStatus(releaseName string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, exists := m.releaseLabels[releaseName]; !exists {
-		return nil, nil
+		return "", nil
 	}
-	return slices.Clone(m.releaseObjects[releaseName]), nil
+	if s, ok := m.statuses[releaseName]; ok {
+		return s, nil
+	}
+	return "deployed", nil
 }
 
-// recordObjects makes the existing release's record list objs.
-func (m *MockHelmClient) recordObjects(releaseName string, objs ...utils.ReleaseObject) {
+// DropClusterRBACFromRecord drops the record's cluster RBAC and list documents,
+// as the real client does.
+func (m *MockHelmClient) DropClusterRBACFromRecord(releaseName string) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.releaseObjects == nil {
-		m.releaseObjects = map[string][]utils.ReleaseObject{}
+	if m.rewrites == nil {
+		m.rewrites = map[string]int{}
 	}
-	m.releaseObjects[releaseName] = objs
+	m.rewrites[releaseName]++
+	var kept []recordDoc
+	var dropped []string
+	for _, d := range m.records[releaseName] {
+		if d.clusterRBACOrList() {
+			dropped = append(dropped, d.Kind+"/"+d.Name)
+			continue
+		}
+		kept = append(kept, d)
+	}
+	if len(dropped) != 0 {
+		m.records[releaseName] = kept
+	}
+	return dropped, nil
+}
+
+// record makes the existing release's latest revision list docs.
+func (m *MockHelmClient) record(releaseName string, docs ...recordDoc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.records == nil {
+		m.records = map[string][]recordDoc{}
+	}
+	m.records[releaseName] = docs
+}
+
+// recordOf is what the release's latest revision lists.
+func (m *MockHelmClient) recordOf(releaseName string) []recordDoc {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.records[releaseName])
+}
+
+// Rewrites counts DropClusterRBACFromRecord calls for the release.
+func (m *MockHelmClient) Rewrites(releaseName string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.rewrites[releaseName]
+}
+
+// setStatus sets the release's latest revision's status.
+func (m *MockHelmClient) setStatus(releaseName, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statuses == nil {
+		m.statuses = map[string]string{}
+	}
+	m.statuses[releaseName] = status
 }
 
 // ListReleases mirrors Helm's List+Selector: a release matches only when it

@@ -40,10 +40,11 @@ func (b *buildRecorder) Build(r io.Reader, validate bool) (kube.ResourceList, er
 
 // Helm keeps a release's record in a Secret in the release's namespace, so
 // anyone who can write Secrets there can forge one whose pre-delete hook is,
-// say, a ClusterRoleBinding. Uninstall runs as the operator, which may create
-// ClusterRoleBindings: running a release's hooks hands that power to whoever
-// last wrote its Secret. None of the releases this operator manages relies on
-// a delete hook, so it never runs one (kdex-tech/nexus-manager#46).
+// say, a ClusterRoleBinding. Uninstall runs as the namespace's installer,
+// which bounds what a hook could create, but running a release's hooks still
+// hands the installer's power to whoever last wrote its Secret. None of the
+// releases this operator manages relies on a delete hook, so it never runs one
+// (kdex-tech/nexus-manager#46).
 func TestHelmClient_UninstallRunsNoReleaseHooks(t *testing.T) {
 	const hook = "kind: ClusterRoleBinding\nmetadata:\n  name: forged-hook\n"
 	kc := &buildRecorder{PrintingKubeClient: &kubefake.PrintingKubeClient{Out: io.Discard, LogOutput: io.Discard}}

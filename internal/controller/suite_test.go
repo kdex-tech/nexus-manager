@@ -90,7 +90,7 @@ func setSuiteHelmClient(c utils.HelmClientInterface) {
 }
 
 // suiteHelmClientFactory is the shared reconciler's HelmClientFactory.
-func suiteHelmClientFactory(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
+func suiteHelmClientFactory(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
 	suiteHelm.mu.Lock()
 	defer suiteHelm.mu.Unlock()
 	if suiteHelm.client == nil {

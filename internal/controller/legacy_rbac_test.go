@@ -5,12 +5,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -87,13 +84,12 @@ func upgraded(t *testing.T, c client.Client, host, ns string) {
 	createObjects(t, c, chartRoleBinding(host, ns), rolledOutDeployment(host, ns))
 }
 
-// legacyRecord is what a never-upgraded host-manager release's record lists
-// outside its namespace.
-func legacyRecord(host, ns string) []utils.ReleaseObject {
-	return []utils.ReleaseObject{
+// legacyRecord is what a never-upgraded host-manager release's record lists.
+func legacyRecord(host, ns string) []recordDoc {
+	return []recordDoc{
 		{Kind: "ServiceAccount", Name: host},
-		{Kind: "ClusterRole", Name: host},
-		{Kind: "ClusterRoleBinding", Name: host + "-" + ns},
+		{Kind: "ClusterRole", Name: host, ClusterScoped: true},
+		{Kind: "ClusterRoleBinding", Name: host + "-" + ns, ClusterScoped: true},
 		{Kind: "Deployment", Name: host},
 	}
 }
@@ -458,229 +454,142 @@ func TestCleanupLegacy_BindingToASharedRole(t *testing.T) {
 	}
 }
 
-// identityHelmClients hands out one Helm client per identity, each counting
-// its own uninstalls over one shared set of releases.
-type identityHelmClients struct {
-	mu        sync.Mutex
-	releases  *MockHelmClient
-	installer *uninstallCountingHelmClient
-	operator  *uninstallCountingHelmClient
+// reconcileTeardown reconciles the terminating host my-host in ns once.
+func reconcileTeardown(t *testing.T, r *KDexHostReconciler) error {
+	t.Helper()
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "my-host"}})
+	return err
 }
 
-func (f *identityHelmClients) install(r *KDexHostReconciler) {
-	r.HelmClientFactory = func(_ string, _ kdexv1alpha1.Secrets, _ logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if identity == utils.HelmAsOperator {
-			return f.operator, nil
-		}
-		return f.installer, nil
+func assertFinalized(t *testing.T, c client.Client) {
+	t.Helper()
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "my-host"}, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
+		t.Errorf("host get = %v, want it finalized", err)
 	}
 }
 
-func newIdentityHelmClients(releases ...string) *identityHelmClients {
-	labels := map[string]map[string]string{}
-	for _, rel := range releases {
-		labels[rel] = nil
-	}
-	shared := NewMockHelmClient(labels)
-	return &identityHelmClients{
-		releases:  shared,
-		installer: &uninstallCountingHelmClient{MockHelmClient: shared},
-		operator:  &uninstallCountingHelmClient{MockHelmClient: shared},
+func assertFinalizerHeld(t *testing.T, c client.Client) {
+	t.Helper()
+	if !controllerutil.ContainsFinalizer(getHost(t, c, "my-host"), hostFinalizerName) {
+		t.Error("finalizer released, want it held")
 	}
 }
 
 // A host never upgraded under the new nexus still has the legacy ClusterRole
-// in its release record. The installer cannot Get it, so its uninstall would
-// fail on Forbidden: the host-manager release is uninstalled as the operator,
-// the legacy objects left are then deleted, and the finalizer released.
-func TestTeardown_LegacyRecordUninstallsAsOperator(t *testing.T) {
-	r, fc, _, _ := newTeardownFixture(t)
-	clients := newIdentityHelmClients("my-host")
-	clients.releases.recordObjects("my-host", legacyRecord("my-host", "ns")...)
-	clients.install(r)
+// and ClusterRoleBinding, and its release record lists them. nexus deletes
+// the objects itself, drops them from the record, and the installer -- the
+// only identity there is -- uninstalls the rest; the finalizer goes.
+func TestTeardown_LegacyRecordDeletedByNexusUninstalledByInstaller(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	mock.record("my-host", legacyRecord("my-host", "ns")...)
 	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
 	createObjects(t, fc, role, binding)
 	deleteHost(t, fc, "my-host")
 
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+	if err := reconcileTeardown(t, r); err != nil {
 		t.Fatalf("Reconcile: %v", err)
-	}
-	if !slices.Equal(clients.operator.calls, []string{"my-host"}) {
-		t.Errorf("operator uninstalls = %v, want [my-host]", clients.operator.calls)
-	}
-	if slices.Contains(clients.installer.calls, "my-host") {
-		t.Errorf("installer uninstalls = %v, want the host release left to the operator", clients.installer.calls)
 	}
 	assertDeleted(t, fc, role)
 	assertDeleted(t, fc, binding)
-	if err := fc.Get(context.Background(), key, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
-		t.Errorf("host get = %v, want it finalized", err)
+	if !slices.Equal(mock.calls, []string{"my-host"}) {
+		t.Errorf("uninstalls = %v, want [my-host]", mock.calls)
 	}
+	if !slices.Contains(mock.Uninstalled(), "my-host") {
+		t.Errorf("uninstalled %v, want my-host", mock.Uninstalled())
+	}
+	assertFinalized(t, fc)
 	assertInstallerGone(t, fc)
 }
 
-// A failed operator uninstall keeps both the legacy objects -- the record
-// still lists them -- and the finalizer.
-func TestTeardown_LegacyKeptWhenOperatorUninstallFails(t *testing.T) {
-	r, fc, _, _ := newTeardownFixture(t)
-	clients := newIdentityHelmClients("my-host")
-	clients.releases.recordObjects("my-host", legacyRecord("my-host", "ns")...)
-	clients.releases.failUninstall = map[string]struct{}{"my-host": {}}
-	clients.install(r)
-	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
-	createObjects(t, fc, role, binding)
+// The record is a Secret anyone writing Secrets in the namespace can forge. A
+// document whose top-level kind and name are the host's legacy ClusterRole,
+// carrying an items list -- a Secret in another tenant's namespace, a system
+// ClusterRoleBinding -- is dropped from the record, and nothing it names is
+// ever deleted: no Helm action has more than the installer's rights, and
+// nexus deletes only the legacy objects it matches itself.
+func TestTeardown_ForgedListRecordDeletesNothingOutsideTheNamespace(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	mock.record("my-host",
+		recordDoc{Kind: "ServiceAccount", Name: "my-host"},
+		recordDoc{Kind: "ClusterRole", Name: "my-host", ClusterScoped: true, List: true},
+	)
+	victim := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: "other-tenant"}}
+	system := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "system:basic-user"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "system:basic-user"},
+	}
+	createObjects(t, fc, victim, system)
 	deleteHost(t, fc, "my-host")
 
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err == nil {
-		t.Fatal("Reconcile succeeded over a failed uninstall")
-	}
-	assertExists(t, fc, role)
-	assertExists(t, fc, binding)
-	if !controllerutil.ContainsFinalizer(getHost(t, fc, "my-host"), hostFinalizerName) {
-		t.Error("finalizer released over a failed uninstall")
-	}
-}
-
-// A terminating namespace removes the release, but not the cluster-scoped
-// legacy objects: teardown deletes them, or nothing ever would.
-func TestTeardown_NamespaceTerminatingDeletesLegacy(t *testing.T) {
-	r, fc, mock, _ := newTeardownFixture(t)
-	role, binding := legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")
-	createObjects(t, fc, role, binding)
-	terminateNamespace(t, fc, "ns")
-	deleteHost(t, fc, "my-host")
-
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+	if err := reconcileTeardown(t, r); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(mock.calls) != 0 {
-		t.Errorf("Uninstall called for %v in a terminating namespace, want no call", mock.calls)
+	assertExists(t, fc, victim)
+	assertExists(t, fc, system)
+	if got := mock.Rewrites("my-host"); got != 1 {
+		t.Errorf("record rewrites = %d, want 1", got)
 	}
-	assertDeleted(t, fc, role)
-	assertDeleted(t, fc, binding)
-	if err := fc.Get(context.Background(), key, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
-		t.Errorf("host get = %v, want it finalized", err)
+	assertFinalized(t, fc)
+}
+
+// A record listing a cluster-scoped kind that is not legacy RBAC keeps it: the
+// installer's uninstall fails closed on it, the host keeps its finalizer and
+// says why, and nothing outside the namespace is deleted.
+func TestTeardown_RecordListingAnotherClusterKindFailsClosed(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	mock.record("my-host",
+		recordDoc{Kind: "ServiceAccount", Name: "my-host"},
+		recordDoc{Kind: "KDexClusterTheme", Name: "shared", ClusterScoped: true},
+	)
+	theme := &kdexv1alpha1.KDexClusterTheme{ObjectMeta: metav1.ObjectMeta{Name: "shared"}}
+	createObjects(t, fc, theme)
+	deleteHost(t, fc, "my-host")
+
+	if err := reconcileTeardown(t, r); err == nil {
+		t.Fatal("Reconcile succeeded over a record the installer cannot uninstall")
+	}
+	assertExists(t, fc, theme)
+	assertFinalizerHeld(t, fc)
+	if slices.Contains(mock.Uninstalled(), "my-host") {
+		t.Error("the release was uninstalled")
+	}
+	cond := meta.FindStatusCondition(getHost(t, fc, "my-host").Status.Conditions, string(kdexv1alpha1.ConditionTypeDegraded))
+	if cond == nil || !strings.Contains(cond.Message, "Deletion is blocked") {
+		t.Errorf("Degraded = %+v, want the blocked deletion explained", cond)
 	}
 }
 
-// The record decides, not the cluster: an operator uninstall that deleted the
-// legacy objects and then failed on another keeps the record whole, and the
-// next pass -- finding no legacy object -- still uninstalls as the operator.
-func TestTeardown_RetriesAsOperatorAfterAPartialUninstall(t *testing.T) {
-	r, fc, _, _ := newTeardownFixture(t)
-	clients := newIdentityHelmClients("my-host")
-	clients.releases.recordObjects("my-host", legacyRecord("my-host", "ns")...)
+// An uninstall that failed part-way keeps the finalizer; the next pass --
+// finding the legacy objects already gone and the record already rewritten --
+// uninstalls as the installer again and converges.
+func TestTeardown_RetriesAfterAPartialUninstall(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	mock.record("my-host", legacyRecord("my-host", "ns")...)
 	failed := false
-	clients.operator.before = func(string) error {
+	mock.before = func(string) error {
 		if failed {
 			return nil
 		}
 		failed = true
-		for _, obj := range []client.Object{legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")} {
-			if err := fc.Delete(context.Background(), obj); err != nil {
-				t.Errorf("delete %s: %v", obj.GetName(), err)
-			}
-		}
 		return errors.New("timed out waiting for the Deployment's deletion")
 	}
-	clients.install(r)
 	createObjects(t, fc, legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns"))
 	deleteHost(t, fc, "my-host")
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err == nil {
+	if err := reconcileTeardown(t, r); err == nil {
 		t.Fatal("Reconcile succeeded over a failed uninstall")
 	}
-	if !controllerutil.ContainsFinalizer(getHost(t, fc, "my-host"), hostFinalizerName) {
-		t.Fatal("finalizer released over a failed uninstall")
-	}
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+	assertFinalizerHeld(t, fc)
+	assertDeleted(t, fc, legacyClusterRole("my-host", "ns"))
+	assertDeleted(t, fc, legacyClusterRoleBinding("my-host", "ns"))
+
+	if err := reconcileTeardown(t, r); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
-	if !slices.Equal(clients.operator.calls, []string{"my-host", "my-host"}) {
-		t.Errorf("operator uninstalls = %v, want my-host twice", clients.operator.calls)
+	if !slices.Equal(mock.calls, []string{"my-host", "my-host"}) {
+		t.Errorf("uninstalls = %v, want my-host twice", mock.calls)
 	}
-	if slices.Contains(clients.installer.calls, "my-host") {
-		t.Errorf("installer uninstalls = %v, want the host release left to the operator", clients.installer.calls)
-	}
-	if err := fc.Get(context.Background(), key, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
-		t.Errorf("host get = %v, want it finalized", err)
-	}
-}
-
-// The record is a Secret anyone writing Secrets in the namespace can forge,
-// and an operator uninstall deletes what it lists. The operator is used only
-// for the host's own legacy RBAC; anything else outside the namespace is
-// refused.
-func TestHostReleaseUninstallIdentity(t *testing.T) {
-	foreignRole := legacyClusterRole("my-host", "ns")
-	foreignRole.Annotations = nil
-	for _, tc := range []struct {
-		name    string
-		record  []utils.ReleaseObject
-		live    []client.Object
-		want    utils.HelmIdentity
-		wantErr bool
-	}{
-		{name: "nothing recorded", want: utils.HelmAsInstaller},
-		{name: "namespaced only", record: []utils.ReleaseObject{
-			{Kind: "RoleBinding", Name: "my-host", Namespace: "ns"}, {Kind: "Deployment", Name: "my-host"},
-		}, want: utils.HelmAsInstaller},
-		{name: "legacy RBAC, live", record: legacyRecord("my-host", "ns"),
-			live: []client.Object{legacyClusterRole("my-host", "ns"), legacyClusterRoleBinding("my-host", "ns")},
-			want: utils.HelmAsOperator},
-		{name: "legacy RBAC, deleted by hand", record: legacyRecord("my-host", "ns"), want: utils.HelmAsOperator},
-		{name: "legacy RBAC name held by another object", record: legacyRecord("my-host", "ns"),
-			live: []client.Object{foreignRole}, wantErr: true},
-		{name: "another ClusterRole", record: []utils.ReleaseObject{{Kind: "ClusterRole", Name: "cluster-admin"}}, wantErr: true},
-		{name: "a CRD", record: []utils.ReleaseObject{{Kind: "CustomResourceDefinition", Name: "kdexhosts.kdex.dev"}}, wantErr: true},
-		{name: "another namespace", record: []utils.ReleaseObject{{Kind: "Deployment", Name: "coredns", Namespace: "kube-system"}}, wantErr: true},
-		{name: "a List", record: []utils.ReleaseObject{{Kind: "List"}}, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			host := helmHost("my-host")
-			mock := NewMockHelmClient(map[string]map[string]string{"my-host": nil})
-			mock.recordObjects("my-host", tc.record...)
-			r, fc := newHelmReconciler(t, mock, nil, host)
-			createObjects(t, fc, tc.live...)
-
-			got, err := r.hostReleaseUninstallIdentity(context.Background(), mock, host)
-			if tc.wantErr {
-				if err == nil {
-					t.Errorf("identity = %v, want a refusal", got)
-				}
-				return
-			}
-			if err != nil || got != tc.want {
-				t.Errorf("identity = %v, %v; want %v", got, err, tc.want)
-			}
-		})
-	}
-}
-
-// A refused record keeps the finalizer and uninstalls nothing as the operator.
-func TestTeardown_ForgedRecordIsRefused(t *testing.T) {
-	r, fc, _, _ := newTeardownFixture(t)
-	clients := newIdentityHelmClients("my-host")
-	clients.releases.recordObjects("my-host", utils.ReleaseObject{Kind: "ClusterRole", Name: "cluster-admin"})
-	clients.install(r)
-	deleteHost(t, fc, "my-host")
-	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err == nil {
-		t.Fatal("Reconcile succeeded over a forged record")
-	}
-	if len(clients.operator.calls) != 0 || len(clients.installer.calls) != 0 {
-		t.Errorf("uninstalls operator=%v installer=%v, want none", clients.operator.calls, clients.installer.calls)
-	}
-	if !controllerutil.ContainsFinalizer(getHost(t, fc, "my-host"), hostFinalizerName) {
-		t.Error("finalizer released over a forged record")
-	}
+	assertFinalized(t, fc)
 }
 
 // Against a real API server, which enforces delete preconditions (the fake

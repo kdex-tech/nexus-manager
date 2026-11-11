@@ -656,7 +656,6 @@ func (r *KDexHostReconciler) runAsyncHelmReconcile(
 		host.Namespace,
 		secrets,
 		log.WithName("helm"),
-		utils.HelmAsInstaller,
 	)
 	if err != nil {
 		r.updateHelmStatus(ctx, namespace, name, hash, err, nil, log)

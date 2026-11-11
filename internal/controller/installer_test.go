@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -25,28 +24,6 @@ var (
 	installerSAKey = client.ObjectKey{Namespace: "ns", Name: "kdex-installer"}
 	installerRBKey = client.ObjectKey{Namespace: "ns", Name: "kdex-installer"}
 )
-
-// identityRecordingFactory makes r's Helm clients mock, recording the identity
-// each was asked for.
-type identityRecordingFactory struct {
-	mu   sync.Mutex
-	seen []utils.HelmIdentity
-}
-
-func (f *identityRecordingFactory) install(r *KDexHostReconciler, mock utils.HelmClientInterface) {
-	r.HelmClientFactory = func(_ string, _ kdexv1alpha1.Secrets, _ logr.Logger, identity utils.HelmIdentity) (utils.HelmClientInterface, error) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.seen = append(f.seen, identity)
-		return mock, nil
-	}
-}
-
-func (f *identityRecordingFactory) identities() []utils.HelmIdentity {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.seen)
-}
 
 // uninstallCountingHelmClient counts every Uninstall call, whether or not the
 // release exists.
@@ -289,15 +266,13 @@ func TestReleaseInstaller_TerminatingSiblingDoesNotKeepIt(t *testing.T) {
 
 // newTeardownFixture is a host with a finalizer, an installed host-manager release
 // and a recorded cluster-reader grant, in a namespace with an installer.
-func newTeardownFixture(t *testing.T) (*KDexHostReconciler, client.Client, *uninstallCountingHelmClient, *identityRecordingFactory) {
+func newTeardownFixture(t *testing.T) (*KDexHostReconciler, client.Client, *uninstallCountingHelmClient) {
 	t.Helper()
 	host := helmHost("my-host")
 	host.Finalizers = []string{hostFinalizerName}
 	host.Status.Attributes = map[string]string{AttributeHostManagerServiceAccount: "my-host"}
 	mock := &uninstallCountingHelmClient{MockHelmClient: NewMockHelmClient(map[string]map[string]string{"my-host": nil})}
 	r, fc := newHelmReconciler(t, mock, nil, host)
-	factory := &identityRecordingFactory{}
-	factory.install(r, mock)
 	ctx := context.Background()
 	if err := r.ensureClusterReaderSubject(ctx, "ns", "my-host"); err != nil {
 		t.Fatal(err)
@@ -305,11 +280,11 @@ func newTeardownFixture(t *testing.T) (*KDexHostReconciler, client.Client, *unin
 	if err := r.ensureInstaller(ctx, "ns"); err != nil {
 		t.Fatal(err)
 	}
-	return r, fc, mock, factory
+	return r, fc, mock
 }
 
 func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
-	r, fc, mock, _ := newTeardownFixture(t)
+	r, fc, mock := newTeardownFixture(t)
 	terminateNamespace(t, fc, "ns")
 	deleteHost(t, fc, "my-host")
 
@@ -330,12 +305,10 @@ func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
 	assertInstallerGone(t, fc)
 }
 
-// A record with nothing outside the namespace is the installer's to
-// uninstall; the operator only reads it.
+// The host's release is uninstalled, then the installer that uninstalled it is
+// released.
 func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
-	r, fc, _, _ := newTeardownFixture(t)
-	clients := newIdentityHelmClients("my-host")
-	clients.install(r)
+	r, fc, mock := newTeardownFixture(t)
 	deleteHost(t, fc, "my-host")
 	// One pass makes one decision about the namespace: the installer
 	// bootstrap reuses it rather than reading the namespace again.
@@ -353,11 +326,8 @@ func TestTeardown_UninstallsAsInstallerThenReleasesIt(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !slices.Equal(clients.installer.calls, []string{"my-host"}) {
-		t.Errorf("installer uninstalls = %v, want [my-host]", clients.installer.calls)
-	}
-	if len(clients.operator.calls) != 0 {
-		t.Errorf("operator uninstalls = %v, want none", clients.operator.calls)
+	if !slices.Equal(mock.calls, []string{"my-host"}) {
+		t.Errorf("uninstalls = %v, want [my-host]", mock.calls)
 	}
 	if got := readClusterReaderSubjects(t, fc); len(got) != 0 {
 		t.Errorf("cluster-reader subjects = %v, want the host's removed", got)
@@ -392,11 +362,10 @@ func TestTeardown_BootstrapsAMissingInstaller(t *testing.T) {
 	assertInstallerPresent(t, fc)
 }
 
-func TestHelmRun_UsesInstallerIdentity(t *testing.T) {
+// A helm run bootstraps the installer every Helm action it takes acts as.
+func TestHelmRun_BootstrapsTheInstaller(t *testing.T) {
 	mock := NewMockHelmClient(map[string]map[string]string{"x": {LabelCompanionOf: "my-host"}})
 	r, fc := newHelmReconciler(t, mock, nil, recorded(helmHost("my-host", "a"), "x"))
-	factory := &identityRecordingFactory{}
-	factory.install(r, mock)
 
 	r.runAsyncHelmReconcile(context.Background(), "ns", "my-host", "hash", nil, logr.Discard())
 
@@ -409,10 +378,6 @@ func TestHelmRun_UsesInstallerIdentity(t *testing.T) {
 	}
 	if !slices.Contains(mock.Uninstalled(), "x") {
 		t.Errorf("uninstalled %v, want the pruned x", mock.Uninstalled())
-	}
-	ids := factory.identities()
-	if len(ids) == 0 || slices.ContainsFunc(ids, func(id utils.HelmIdentity) bool { return id != utils.HelmAsInstaller }) {
-		t.Errorf("helm run identities = %v, want only HelmAsInstaller", ids)
 	}
 	assertInstallerPresent(t, fc)
 }

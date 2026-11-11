@@ -29,7 +29,10 @@ import (
 	releaseutil "helm.sh/helm/v4/pkg/release/v1/util"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/rest"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -109,21 +112,14 @@ type ChartSpec struct {
 	Proceed func() error
 }
 
-// HelmClientInterface defines the operations for Helm management.
+// HelmClientInterface defines the operations for Helm management. Every
+// operation acts as the namespace's installer (see NewHelmClient).
 type HelmClientInterface interface {
 	InstallOrUpgrade(spec *ChartSpec) error
 	ListReleases(matchLabels map[string]string) ([]string, error)
-	ReleaseObjects(releaseName string) ([]ReleaseObject, error)
+	ReleaseStatus(releaseName string) (string, error)
+	DropClusterRBACFromRecord(releaseName string) ([]string, error)
 	Uninstall(releaseName string) error
-}
-
-// ReleaseObject is one object a release's record lists. Namespace is as the
-// manifest states it: empty for a cluster-scoped object, or for a namespaced
-// one Helm places in the release's namespace.
-type ReleaseObject struct {
-	Kind      string
-	Name      string
-	Namespace string
 }
 
 // HelmClient is a wrapper around helm v4 SDK to simplify Helm operations.
@@ -134,15 +130,13 @@ type HelmClient struct {
 	// connection is restConfig, through a restConfigGetter.
 	settings     *cli.EnvSettings
 	actionConfig *action.Configuration
-	// getter is the connection actionConfig acts through.
-	getter *restConfigGetter
-	// impersonate is the user every request acts as; empty is the base
-	// config's own identity.
-	impersonate string
-	log         logr.Logger
-	namespace   string
-	mu          sync.RWMutex
-	secrets     kdexv1alpha1.Secrets
+	// getter is the connection actionConfig acts through, impersonating the
+	// namespace's installer.
+	getter    *restConfigGetter
+	log       logr.Logger
+	namespace string
+	mu        sync.RWMutex
+	secrets   kdexv1alpha1.Secrets
 	// maxFetchBytes overrides RegistryFetchMaxBytes when positive.
 	maxFetchBytes int64
 	// metaReader lists release Secrets as metadata only (see ListReleases).
@@ -178,22 +172,6 @@ func InstallerUser(namespace string) string {
 	return "system:serviceaccount:" + namespace + ":" + InstallerServiceAccountName
 }
 
-// HelmIdentity names who a Helm client acts as.
-type HelmIdentity int
-
-const (
-	// HelmAsInstaller acts as the namespace's kdex-installer ServiceAccount.
-	HelmAsInstaller HelmIdentity = iota
-	// HelmAsOperator acts as nexus's own identity.
-	HelmAsOperator
-)
-
-// WithImpersonation makes the client act as user, on the base REST config it
-// is given.
-func WithImpersonation(user string) HelmClientOption {
-	return func(h *HelmClient) { h.impersonate = user }
-}
-
 // registryLimits is defaultRegistryFetchLimits, with the client's byte budget.
 func (h *HelmClient) registryLimits() registryFetchLimits {
 	limits := defaultRegistryFetchLimits
@@ -207,8 +185,12 @@ var _ HelmClientInterface = (*HelmClient)(nil)
 
 // NewHelmClient creates a new HelmClient for the given namespace, acting on
 // the cluster restConfig connects to -- the operator's own config: in-cluster
-// in a pod, envtest's in a test -- as restConfig's identity, or as the user
-// WithImpersonation names. restConfig is copied, never changed.
+// in a pod, envtest's in a test -- always impersonating the namespace's
+// installer (InstallerUser), whatever restConfig impersonated. There is no
+// other identity: a release record is a Secret whoever writes Secrets in the
+// namespace can forge, and Helm acts on what it lists, so no Helm action may
+// run with more than the installer's namespace-bounded rights
+// (kdex-tech/nexus-manager#46). restConfig is copied, never changed.
 //
 // The connection is never Helm's own kubeconfig loading (cli.EnvSettings'
 // RESTClientGetter). Given an impersonation override, client-go's deferred
@@ -251,7 +233,7 @@ func NewHelmClient(
 		helmDriver = "secret"
 	}
 
-	h.getter = newRESTConfigGetter(restConfig, namespace, h.impersonate, settings)
+	h.getter = newRESTConfigGetter(restConfig, namespace, InstallerUser(namespace), settings)
 	if err := actionConfig.Init(
 		h.getter,
 		namespace,
@@ -389,14 +371,9 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 	return sharedChartPaths.get(key, load)
 }
 
-// ReleaseObjects lists the objects in the manifest of the release's latest
-// revision: the record an uninstall acts on, whatever its status -- one that
-// failed part-way leaves it "uninstalling", still listing what it had yet to
-// delete. A release that does not exist lists nothing.
-//
-// The record is a Secret in the release's namespace, which whoever can write
-// Secrets there can forge: what it lists is a claim, not a fact.
-func (h *HelmClient) ReleaseObjects(releaseName string) ([]ReleaseObject, error) {
+// latestRevision reads the release's latest revision from storage, nil for a
+// release that does not exist.
+func (h *HelmClient) latestRevision(releaseName string) (*rspb.Release, error) {
 	last, err := h.actionConfig.Releases.Last(releaseName)
 	if errors.Is(err, driver.ErrReleaseNotFound) {
 		return nil, nil
@@ -404,38 +381,107 @@ func (h *HelmClient) ReleaseObjects(releaseName string) ([]ReleaseObject, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the record of release %s: %w", releaseName, err)
 	}
-	var manifest string
 	switch rel := last.(type) {
 	case *rspb.Release:
-		manifest = rel.Manifest
+		return rel, nil
 	case rspb.Release:
-		manifest = rel.Manifest
+		return &rel, nil
 	default:
 		return nil, fmt.Errorf("failed to read the record of release %s: unsupported release type %T", releaseName, last)
 	}
+}
 
-	docs := releaseutil.SplitManifests(manifest)
+// ReleaseStatus is the status of the release's latest revision ("deployed",
+// "failed", "pending-upgrade", ...), or "" for a release that does not exist.
+// It reads storage without the client's lock, as Uninstall does: a read must
+// not wait out an install in progress.
+func (h *HelmClient) ReleaseStatus(releaseName string) (string, error) {
+	rel, err := h.latestRevision(releaseName)
+	if err != nil || rel == nil || rel.Info == nil {
+		return "", err
+	}
+	return string(rel.Info.Status), nil
+}
+
+// DropClusterRBACFromRecord rewrites the manifest of the release's latest
+// revision -- the record an uninstall acts on -- without its ClusterRole and
+// ClusterRoleBinding documents and without any list-typed document, and
+// returns what it dropped ("Kind/name"). A record with nothing to drop is not
+// written; a release that does not exist has nothing to drop.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue).
+// A pre-redesign host-manager release lists its legacy ClusterRole and
+// ClusterRoleBinding, which the installer -- the only identity a HelmClient
+// has -- is Forbidden to delete, so its uninstall would fail. nexus deletes
+// the legacy objects itself (verified by UID and Helm ownership annotations,
+// never from this record) and then drops them from the record here, so the
+// installer's uninstall does not trip over what is already gone.
+//
+// This is no authorization: the record is a Secret whoever writes Secrets in
+// the namespace can forge, before or after this rewrite, and the uninstall
+// that follows can do only what the installer may. List-typed documents go
+// too because Helm's uninstall flattens them -- a document whose top-level
+// kind is ClusterRole can carry an items list of anything -- and nothing a
+// host-manager chart renders is one. Every other document stays: one the
+// installer cannot delete (a cluster-scoped kind, another namespace) fails the
+// uninstall closed, which keeps the host's finalizer for an administrator.
+// Each document is classified with the unstructured decoder Helm's resource
+// builder uses; one that does not decode is kept, and fails the uninstall's
+// build in turn.
+func (h *HelmClient) DropClusterRBACFromRecord(releaseName string) ([]string, error) {
+	rel, err := h.latestRevision(releaseName)
+	if err != nil || rel == nil {
+		return nil, err
+	}
+	docs := releaseutil.SplitManifests(rel.Manifest)
 	keys := slices.Collect(maps.Keys(docs))
 	sort.Sort(releaseutil.BySplitManifestsOrder(keys))
-	objs := make([]ReleaseObject, 0, len(keys))
+
+	var kept strings.Builder
+	var dropped []string
 	for _, k := range keys {
-		var head struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-		}
-		if err := yaml.Unmarshal([]byte(docs[k]), &head); err != nil {
-			return nil, fmt.Errorf("failed to parse the manifest of release %s: %w", releaseName, err)
-		}
-		if head.Kind == "" {
-			// A template that rendered only comments.
+		if what, drop := clusterRBACOrList(docs[k]); drop {
+			dropped = append(dropped, what)
 			continue
 		}
-		objs = append(objs, ReleaseObject{Kind: head.Kind, Name: head.Metadata.Name, Namespace: head.Metadata.Namespace})
+		kept.WriteString("---\n")
+		kept.WriteString(docs[k])
+		kept.WriteString("\n")
 	}
-	return objs, nil
+	if len(dropped) == 0 {
+		return nil, nil
+	}
+	rel.Manifest = kept.String()
+	if err := h.actionConfig.Releases.Update(rel); err != nil {
+		return nil, fmt.Errorf("failed to rewrite the record of release %s: %w", releaseName, err)
+	}
+	return dropped, nil
+}
+
+// clusterRBACOrList decodes one manifest document as Helm's resource builder
+// does and reports whether DropClusterRBACFromRecord drops it, naming it when
+// it does.
+func clusterRBACOrList(doc string) (string, bool) {
+	raw, err := yaml.YAMLToJSON([]byte(doc))
+	if err != nil {
+		return "", false
+	}
+	obj, gvk, err := unstructured.UnstructuredJSONScheme.Decode(raw, nil, nil)
+	if err != nil || gvk == nil {
+		return "", false
+	}
+	name := ""
+	if o, ok := obj.(metav1.Object); ok {
+		name = o.GetName()
+	}
+	what := gvk.Kind + "/" + name
+	switch {
+	case meta.IsListType(obj), strings.HasSuffix(gvk.Kind, "List"):
+		return what, true
+	case gvk.Group == rbacv1.GroupName && (gvk.Kind == "ClusterRole" || gvk.Kind == "ClusterRoleBinding"):
+		return what, true
+	}
+	return "", false
 }
 
 // Uninstall uninstalls a Helm release, running none of its hooks. A release
@@ -443,11 +489,11 @@ func (h *HelmClient) ReleaseObjects(releaseName string) ([]ReleaseObject, error)
 //
 // Helm keeps a release's record -- hooks included -- in a Secret in the
 // release's namespace, so whoever can write Secrets there can forge the record.
-// Uninstall acts as the operator, whose RBAC reaches cluster-scoped resources,
-// so running a release's delete hooks would create whatever the last writer of
-// that Secret put in them. None of the releases this operator manages (the
-// host-manager chart, the companion charts) relies on a delete hook.
-// See kdex-tech/nexus-manager#46.
+// Uninstall acts as the namespace's installer, which bounds what a forged
+// record can delete; running its delete hooks would still create whatever the
+// last writer of that Secret put in them. None of the releases this operator
+// manages (the host-manager chart, the companion charts) relies on a delete
+// hook. See kdex-tech/nexus-manager#46.
 func (h *HelmClient) Uninstall(releaseName string) error {
 	// Discovery only, and without h.mu: an uninstall reads no Capabilities,
 	// and a teardown that has stopped waiting for a run still inside an

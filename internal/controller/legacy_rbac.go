@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kdex-tech/nexus-manager/internal/utils"
 	appsv1 "k8s.io/api/apps/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,8 +25,10 @@ import (
 // redesigned chart renders only a namespaced Role and RoleBinding/<host>.
 // Upgrading as the namespace's installer cannot remove the legacy objects:
 // Helm skips a dropped resource it is Forbidden to Get. So nexus deletes them
-// itself, once the upgrade has landed and rolled out, and uninstalls a release
-// whose record still lists them with its own identity.
+// itself, once the upgrade has landed and rolled out -- or at teardown, before
+// the uninstall, which then drops them from the release record
+// (HelmClientInterface.DropClusterRBACFromRecord) and runs as the installer
+// like every other Helm action.
 //
 // Migration code: delete in release B (see the follow-up issue filed in Task N9).
 const (
@@ -43,29 +44,6 @@ const (
 	helmReleaseNameAnnotation      = "meta.helm.sh/release-name"
 	helmReleaseNamespaceAnnotation = "meta.helm.sh/release-namespace"
 )
-
-// clusterScopedKinds are the cluster-scoped kinds a release record may list
-// that a namespace's installer cannot uninstall. A kind missing here is
-// treated as namespaced, so its uninstall is attempted as the installer and
-// fails Forbidden: a blocked teardown, never a wider identity.
-//
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
-var clusterScopedKinds = map[string]struct{}{
-	"APIService":                       {},
-	kindClusterRole:                    {},
-	"ClusterRoleBinding":               {},
-	"CustomResourceDefinition":         {},
-	"IngressClass":                     {},
-	"MutatingWebhookConfiguration":     {},
-	"Namespace":                        {},
-	"PersistentVolume":                 {},
-	"PriorityClass":                    {},
-	"RuntimeClass":                     {},
-	"StorageClass":                     {},
-	"ValidatingAdmissionPolicy":        {},
-	"ValidatingAdmissionPolicyBinding": {},
-	"ValidatingWebhookConfiguration":   {},
-}
 
 // helmReleasedBy reports whether Helm's ownership annotations on obj name the
 // host's release: the release name alone is not enough, since same-named hosts
@@ -170,73 +148,6 @@ func (r *KDexHostReconciler) deleteLegacyRBAC(ctx context.Context, role *rbacv1.
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// hostReleaseUninstallIdentity is who uninstalls the host-manager release,
-// decided by its record, read through operator (an installer may not be able
-// to read a record in every state). A record listing nothing outside the
-// host's namespace is the installer's. One listing legacy RBAC is the
-// operator's: the installer, Forbidden to Get a ClusterRole, would fail the
-// uninstall -- whether or not the objects still exist, since an uninstall that
-// failed part-way keeps the record whole.
-//
-// The record can be forged by whoever writes Secrets in the namespace, and an
-// uninstall as the operator deletes what it lists. So the operator is used
-// only when everything the record lists outside the namespace is the host's
-// legacy RBAC -- by name, and, where the object exists, by its Helm ownership
-// -- and anything else is refused, for an administrator to uninstall.
-//
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
-func (r *KDexHostReconciler) hostReleaseUninstallIdentity(ctx context.Context, operator utils.HelmClientInterface, host *kdexv1alpha1.KDexHost) (utils.HelmIdentity, error) {
-	objs, err := operator.ReleaseObjects(host.Name)
-	if err != nil {
-		return 0, err
-	}
-	identity := utils.HelmAsInstaller
-	for _, o := range objs {
-		_, clusterScoped := clusterScopedKinds[o.Kind]
-		if !clusterScoped && (o.Namespace == "" || o.Namespace == host.Namespace) && !strings.HasSuffix(o.Kind, "List") {
-			continue
-		}
-		if err := r.verifyLegacyRecordObject(ctx, o, host); err != nil {
-			return 0, err
-		}
-		identity = utils.HelmAsOperator
-	}
-	return identity, nil
-}
-
-// verifyLegacyRecordObject accepts o, an object the host's release record lists
-// outside the namespace, only if it is the host's legacy ClusterRole or
-// ClusterRoleBinding by name, and the object of that name, if one exists, is
-// the release's.
-//
-// Migration code: delete in release B (see the follow-up issue filed in Task N9).
-func (r *KDexHostReconciler) verifyLegacyRecordObject(ctx context.Context, o utils.ReleaseObject, host *kdexv1alpha1.KDexHost) error {
-	var live client.Object
-	var ours func() bool
-	switch {
-	case o.Kind == kindClusterRole && o.Name == host.Name:
-		role := &rbacv1.ClusterRole{}
-		live, ours = role, func() bool { return isLegacyRole(role, host) }
-	case o.Kind == "ClusterRoleBinding" && o.Name == legacyBindingName(host):
-		binding := &rbacv1.ClusterRoleBinding{}
-		live, ours = binding, func() bool { return isLegacyBinding(binding, host) }
-	default:
-		return fmt.Errorf("the record of release %s/%s lists %s %q outside its namespace, which is not its legacy RBAC: refusing to uninstall it as the operator; uninstall it by hand",
-			host.Namespace, host.Name, o.Kind, o.Name)
-	}
-	if err := r.reader().Get(ctx, client.ObjectKey{Name: o.Name}, live); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to read %s %q listed by the record of release %s/%s: %w", o.Kind, o.Name, host.Namespace, host.Name, err)
-	}
-	if !ours() {
-		return fmt.Errorf("the record of release %s/%s lists %s %q, which exists but is not the release's: refusing to uninstall it as the operator; uninstall it by hand",
-			host.Namespace, host.Name, o.Kind, o.Name)
-	}
-	return nil
 }
 
 // setLegacyRBACCondition sets ConditionLegacyRBACPresent on the in-memory

@@ -50,8 +50,11 @@ func (m *concurrencyTrackingHelmClient) ListReleases(map[string]string) ([]strin
 	return nil, nil
 }
 
-// ReleaseObjects: no record lists anything outside its namespace.
-func (m *concurrencyTrackingHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) {
+// ReleaseStatus: no release has a recorded status.
+func (m *concurrencyTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
+
+// DropClusterRBACFromRecord: no record lists cluster-scoped RBAC.
+func (m *concurrencyTrackingHelmClient) DropClusterRBACFromRecord(string) ([]string, error) {
 	return nil, nil
 }
 
@@ -111,7 +114,7 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: limit,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
 			return mock, nil
 		},
 	}
@@ -167,8 +170,11 @@ func (m *pruneTrackingHelmClient) ListReleases(map[string]string) ([]string, err
 	return []string{"orphaned-companion"}, nil
 }
 
-// ReleaseObjects: no record lists anything outside its namespace.
-func (m *pruneTrackingHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) {
+// ReleaseStatus: no release has a recorded status.
+func (m *pruneTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
+
+// DropClusterRBACFromRecord: no record lists cluster-scoped RBAC.
+func (m *pruneTrackingHelmClient) DropClusterRBACFromRecord(string) ([]string, error) {
 	return nil, nil
 }
 
@@ -241,7 +247,7 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 		Configuration:         configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:                scheme,
 		HelmRenderConcurrency: 1,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
 			return mock, nil
 		},
 	}

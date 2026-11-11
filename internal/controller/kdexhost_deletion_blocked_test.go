@@ -36,8 +36,11 @@ func (c *stuckUninstallHelmClient) ListReleases(map[string]string) ([]string, er
 	return nil, nil
 }
 
-// ReleaseObjects: no record lists anything outside its namespace.
-func (c *stuckUninstallHelmClient) ReleaseObjects(string) ([]utils.ReleaseObject, error) {
+// ReleaseStatus: no release has a recorded status.
+func (c *stuckUninstallHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
+
+// DropClusterRBACFromRecord: no record lists cluster-scoped RBAC.
+func (c *stuckUninstallHelmClient) DropClusterRBACFromRecord(string) ([]string, error) {
 	return nil, nil
 }
 
@@ -87,7 +90,7 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 		Ctx:           context.Background(),
 		Configuration: configuration.LoadConfiguration("/nonexistent-config.yaml", scheme),
 		Scheme:        scheme,
-		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger, utils.HelmIdentity) (utils.HelmClientInterface, error) {
+		HelmClientFactory: func(string, kdexv1alpha1.Secrets, logr.Logger) (utils.HelmClientInterface, error) {
 			return &stuckUninstallHelmClient{}, nil
 		},
 	}
