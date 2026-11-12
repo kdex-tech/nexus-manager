@@ -57,8 +57,8 @@ var errClusterReaderBindingMissing = errors.New("ClusterRoleBinding " + clusterR
 // updateClusterReaderSubjects is the optimistic-lock read-modify-update of
 // the binding's subjects. The binding is owned by the nexus chart: when it is
 // missing the chart is too old, and creating it here would split ownership.
-// Read through the API reader so no cluster-wide ClusterRoleBinding informer
-// starts.
+// Read live through the API reader: the conflict-checked update needs the
+// binding as it is now, which the name-filtered informer may lag.
 func (r *KDexHostReconciler) updateClusterReaderSubjects(ctx context.Context, modify func([]rbacv1.Subject) ([]rbacv1.Subject, bool)) error {
 	key := types.NamespacedName{Name: clusterReaderBindingName}
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {

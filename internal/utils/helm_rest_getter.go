@@ -43,11 +43,11 @@ type restConfigGetter struct {
 
 var _ genericclioptions.RESTClientGetter = (*restConfigGetter)(nil)
 
-// newRESTConfigGetter copies base, acting as impersonate when it is not
-// empty and as base's own identity when it is, whatever base impersonated.
-func newRESTConfigGetter(base *rest.Config, namespace, impersonate string, settings *cli.EnvSettings) *restConfigGetter {
+// newRESTConfigGetter copies base, acting as the namespace's installer
+// (InstallerUser), whatever base impersonated.
+func newRESTConfigGetter(base *rest.Config, namespace string, settings *cli.EnvSettings) *restConfigGetter {
 	c := rest.CopyConfig(base)
-	c.Impersonate = rest.ImpersonationConfig{UserName: impersonate}
+	c.Impersonate = rest.ImpersonationConfig{UserName: InstallerUser(namespace)}
 	c.Burst = settings.BurstLimit
 	c.QPS = settings.QPS
 	c.Wrap(func(rt http.RoundTripper) http.RoundTripper {

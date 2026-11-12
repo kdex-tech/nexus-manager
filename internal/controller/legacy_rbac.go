@@ -244,7 +244,10 @@ func requeueForLegacyRBAC(res ctrl.Result, err error, after time.Duration) ctrl.
 //     fails every later upgrade and so the grant after it;
 //   - the cluster-reader binding holds the ServiceAccount the Deployment runs
 //     as: before the migration the legacy binding is host-manager's only read
-//     of cluster-scoped objects, and the grant after an install can fail.
+//     of cluster-scoped objects, and the grant after an install can fail;
+//   - that ServiceAccount is the one recorded for the host, which is what
+//     teardown releases from the binding: a subject granted but not yet
+//     recorded would outlive the host.
 //
 // Migration code: delete in release B (privilege-redesign follow-up issue).
 func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets) (bool, error) {
@@ -270,6 +273,10 @@ func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdex
 	if !deploymentRolledOut(deployment) {
 		return false, nil
 	}
+	sa := deploymentServiceAccount(deployment)
+	if recordedHostManagerServiceAccount(host) != sa {
+		return false, nil
+	}
 
 	if r.HelmClientFactory == nil {
 		return false, errors.New("HelmClientFactory is nil")
@@ -286,7 +293,7 @@ func (r *KDexHostReconciler) hostManagerUpgraded(ctx context.Context, host *kdex
 		return false, nil
 	}
 
-	return r.clusterReaderGranted(ctx, host.Namespace, deploymentServiceAccount(deployment))
+	return r.clusterReaderGranted(ctx, host.Namespace, sa)
 }
 
 // deploymentRolledOut reports whether d's controller has seen its latest spec

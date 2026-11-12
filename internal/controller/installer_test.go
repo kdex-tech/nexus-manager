@@ -146,7 +146,9 @@ func TestEnsureInstaller_HealsAnExistingBinding(t *testing.T) {
 	ctx := context.Background()
 	if err := fc.Create(ctx, &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: "ns",
-			Labels:     map[string]string{"app.kubernetes.io/managed-by": "kcnas-operator"},
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "kcnas-operator"},
+			// Migration code: delete in release B (privilege-redesign follow-up issue).
+			// The finalizer earlier builds put on the binding.
 			Finalizers: []string{"kdex.dev/installer"}},
 		RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "kcnas-operator-installer"},
 		Subjects: []rbacv1.Subject{

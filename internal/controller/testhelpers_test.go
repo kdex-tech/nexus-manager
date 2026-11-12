@@ -1,14 +1,50 @@
 package controller
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func createObjects(t *testing.T, c client.Client, objs ...client.Object) {
+	t.Helper()
+	for _, o := range objs {
+		if err := c.Create(context.Background(), o); err != nil {
+			t.Fatalf("create %T %s: %v", o, o.GetName(), err)
+		}
+	}
+}
+
+func assertExists(t *testing.T, c client.Client, obj client.Object) {
+	t.Helper()
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(obj), obj); err != nil {
+		t.Errorf("%T %s: %v, want it kept", obj, obj.GetName(), err)
+	}
+}
+
+// reconcileTeardown reconciles the terminating host my-host in ns once.
+func reconcileTeardown(t *testing.T, r *KDexHostReconciler) error {
+	t.Helper()
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "my-host"}})
+	return err
+}
+
+func assertFinalized(t *testing.T, c client.Client) {
+	t.Helper()
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "my-host"}, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
+		t.Errorf("host get = %v, want it finalized", err)
+	}
+}
 
 // withHostIndexes registers the indexes the host reconciler lists by -- its
 // teardown's internal pages and translations, a full pass's attached

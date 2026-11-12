@@ -44,8 +44,7 @@ const (
 	// Migration code: delete in release B (privilege-redesign follow-up issue).
 	legacyInstallerFinalizer = "kdex.dev/installer"
 
-	// kindClusterRole is the kind a roleRef or a release record names a
-	// ClusterRole by.
+	// kindClusterRole is the kind a roleRef names a ClusterRole by.
 	kindClusterRole = "ClusterRole"
 )
 

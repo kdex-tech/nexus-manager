@@ -11,10 +11,13 @@ kubectl get clusterrolebinding,clusterrole -l app.kubernetes.io/name=host-manage
 # must print nothing, on every cluster
 ```
 
-Every symbol below carries the comment
+Every code site below is marked with the comment
 `// Migration code: delete in release B (privilege-redesign follow-up issue).`
-(`rg 'Migration code: delete in release B'` lists them), and every RBAC marker
-to drop carries a `// release B: drop ...` comment above it in
+-- on the symbol, or on the block or fixture line to delete
+(`rg 'Migration code: delete in release B'` lists them) -- except the doc
+comments to edit, which this page names as such. A marker on a type or a
+group may cover several symbols; its comment names them. Every RBAC marker to
+drop carries a `// release B: drop ...` comment above it in
 `internal/controller/rbac.go`. When the follow-up issue is filed, replace
 "privilege-redesign follow-up issue" in those comments with its number.
 
@@ -44,9 +47,12 @@ to drop carries a `// release B: drop ...` comment above it in
 
 - `legacyInstallerFinalizer` and the `controllerutil.RemoveFinalizer` call in
   `ensureInstallerObjects` that strips it (it was only ever set by pre-release
-  builds of release A).
+  builds of release A); edit the `ensureInstaller` doc comment's
+  "legacyInstallerFinalizer removed" out of what an existing object is healed
+  of.
 - `teardownHost`: the `legacyRBAC` / `deleteLegacyRBAC` block before the
-  uninstall.
+  uninstall; edit its doc comment's "any legacy cluster-scoped RBAC, which no
+  namespace deletion removes" out of the steps it lists.
 - `uninstallHostReleases`: the `DropClusterRBACFromRecord` call and its log line;
   uninstall directly.
 
@@ -61,9 +67,11 @@ to drop carries a `// release B: drop ...` comment above it in
 - From `HelmClientInterface`: `ReleaseStatus`, `DropClusterRBACFromRecord`.
 - `(*HelmClient).latestRevision`, `(*HelmClient).ReleaseStatus`,
   `(*HelmClient).DropClusterRBACFromRecord`, `clusterRBACOrList`; then the
-  imports only they use (`k8s.io/apimachinery/pkg/api/meta`,
-  `.../apis/meta/v1/unstructured`, `rbacv1`, `releaseutil`, `sort`, `maps` if
-  unused, and `rspb` if unused).
+  imports only they use: `k8s.io/apimachinery/pkg/api/meta`,
+  `.../apis/meta/v1/unstructured`, `rbacv1`, `releaseutil`, `rspb`, `sort`,
+  `maps` and `sigs.k8s.io/yaml` (`metav1`, `driver`, `errors`, `slices` and
+  `strings` stay: other code in the file uses them). `sigs.k8s.io/yaml` stays
+  in `go.mod`: tests use it.
 
 ## RBAC (`internal/controller/rbac.go`, then `make manifests` and regenerate the chart's `chart/templates/rbac/role.yaml`)
 
@@ -98,9 +106,9 @@ Every line commented `// release B: drop ...` above it (spec D8):
   once the broad line is gone.
 
 Keep: get/list/watch on what the reconcilers read; the kdex.dev writes nexus
-makes (`kdexhosts` finalizer/status, `kdexinternalhosts`,
-`kdexinternaltranslations`, `kdexinternalutilitypages` and their status,
-content-kind status); the D2 grants (impersonate `kdex-installer`, rolebindings,
+makes (`kdexhosts` finalizer/status, `kdexinternalhosts` itself but not its
+status, `kdexinternaltranslations` and `kdexinternalutilitypages` and their
+status, content-kind status); the D2 grants (impersonate `kdex-installer`, rolebindings,
 `bind` on `kcnas-operator-installer`, the cluster-reader binding, namespaces get).
 
 ## Tests
@@ -108,10 +116,15 @@ content-kind status); the D2 grants (impersonate `kdex-installer`, rolebindings,
 - Delete `internal/controller/legacy_rbac_test.go`,
   `internal/controller/legacy_record_envtest_test.go`,
   `internal/utils/helm_legacy_record_test.go`.
-- `internal/controller/mocks_test.go`: `recordDoc` and the mock's `records`,
-  `statuses`, `rewrites`, `record`, `recordOf`, `setStatus`, `Rewrites`,
-  `ReleaseStatus`, `DropClusterRBACFromRecord`, and the record check in
-  `Uninstall`; `addRelease` if nothing else uses it.
+- `internal/controller/mocks_test.go`: `recordDoc` with its
+  `installerDeletable` and `clusterRBACOrList`, `mockInstaller`, the mock's
+  `records`, `statuses`, `rewrites`, `record`, `recordOf`, `setStatus`,
+  `Rewrites`, `ReleaseStatus`, `DropClusterRBACFromRecord`, and the record
+  check in `Uninstall`; `addRelease` if nothing else uses it.
+- The helpers permanent tests share (`createObjects`, `assertExists`,
+  `reconcileTeardown`, `assertFinalized`) live in
+  `internal/controller/testhelpers_test.go`, so deleting the legacy test files
+  above compiles; keep them.
 - The `ReleaseStatus` / `DropClusterRBACFromRecord` stubs on
   `stuckUninstallHelmClient` (`kdexhost_deletion_blocked_test.go`),
   `stubHelmClient` (`helm_client_cache_test.go`),

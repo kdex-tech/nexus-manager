@@ -236,7 +236,7 @@ func NewHelmClient(
 		helmDriver = "secret"
 	}
 
-	h.getter = newRESTConfigGetter(restConfig, namespace, InstallerUser(namespace), settings)
+	h.getter = newRESTConfigGetter(restConfig, namespace, settings)
 	if err := actionConfig.Init(
 		h.getter,
 		namespace,
@@ -250,7 +250,7 @@ func NewHelmClient(
 }
 
 // freshen makes the operation starting now see the cluster as it is now.
-// A client is cached per host and identity and serves operation after
+// A client is cached per host and serves operation after
 // operation on one action configuration, which keeps what it learns: the
 // Capabilities a chart renders against (.Capabilities.APIVersions), read once
 // and kept, and the discovery the REST mappings come from. Left alone, a kind
@@ -464,6 +464,10 @@ func (h *HelmClient) DropClusterRBACFromRecord(releaseName string) ([]string, er
 		return nil, nil
 	}
 	rel.Manifest = kept.String()
+	// Helm's Secrets driver sends no resourceVersion on Update, so this is an
+	// unconditional overwrite of whatever the record holds now. Acceptable:
+	// it runs only in teardown, immediately before the uninstall that purges
+	// the release.
 	if err := h.actionConfig.Releases.Update(rel); err != nil {
 		return nil, fmt.Errorf("failed to rewrite the record of release %s: %w", releaseName, err)
 	}

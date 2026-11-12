@@ -27,6 +27,9 @@ var _ = Describe("Helm client impersonating the installer", func() {
 
 		// Without a grant the server refuses the installer by name: the call
 		// reached it, impersonating.
+		//
+		// Migration code: delete in release B (privilege-redesign follow-up issue).
+		// Probe with Uninstall("absent") instead, here and below.
 		_, err = installer.ReleaseStatus("absent")
 		Expect(err).To(HaveOccurred())
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "want Forbidden, got %v", err)

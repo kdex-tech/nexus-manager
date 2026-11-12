@@ -228,6 +228,8 @@ func (m *MockHelmClient) Uninstall(releaseName string) error {
 	}
 	// Every client acts as the installer: a record listing anything it may
 	// not delete fails the uninstall, Forbidden, and stays.
+	//
+	// Migration code: delete in release B (privilege-redesign follow-up issue).
 	for _, d := range m.records[releaseName] {
 		if !d.installerDeletable() {
 			return fmt.Errorf("failed to uninstall release %s: %s %q is forbidden to %s", releaseName, d.Kind, d.Name, mockInstaller)
@@ -241,14 +243,18 @@ func (m *MockHelmClient) Uninstall(releaseName string) error {
 }
 
 // mockInstaller is the installer every mock client acts as.
+//
+// Migration code: delete in release B (privilege-redesign follow-up issue).
+// Only the record check in Uninstall names it.
 const mockInstaller = "system:serviceaccount:ns:kdex-installer"
 
 // recordDoc is one document of a release record, as far as an installer's
 // uninstall of it cares.
 //
 // Migration code: delete in release B (privilege-redesign follow-up issue). With it go
-// records, statuses, rewrites, record, recordOf, setStatus, Rewrites,
-// ReleaseStatus and DropClusterRBACFromRecord.
+// its installerDeletable and clusterRBACOrList, and the mock's records,
+// statuses, rewrites, record, recordOf, setStatus, Rewrites, ReleaseStatus
+// and DropClusterRBACFromRecord.
 type recordDoc struct {
 	Kind, Name string
 	// Namespace is as the manifest states it: empty for the release's own.
