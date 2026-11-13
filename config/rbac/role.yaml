@@ -43,8 +43,6 @@ rules:
   - deployments
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - kdex.dev
   resources:
@@ -149,7 +147,6 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
-  - kcnas-operator-host-manager-cluster-reader
   - kcnas-operator-installer
   resources:
   - clusterroles

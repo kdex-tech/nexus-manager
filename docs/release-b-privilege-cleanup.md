@@ -21,10 +21,15 @@ ClusterRoleBinding, no RoleBinding carries the `kdex.dev/installer` finalizer,
 and no host carries `LegacyRBACPresent`.
 
 The sections below are the removal list as planned (the code markers it
-refers to are gone with the code). Beyond it, release B also dropped the
-read-only `kdexroles`, `kdexrolebindings` and `kdexinternalpackagereferences`
-grants (nothing in nexus reads them) and added `bind` on the cluster-reader
-ClusterRole.
+refers to are gone with the code). Beyond it, release B also:
+
+- dropped the read-only `kdexroles`, `kdexrolebindings` and
+  `kdexinternalpackagereferences` grants (nothing in nexus reads them);
+- narrowed `apps/deployments` to `get`: both Deployment reads are live, so no
+  cluster-wide Deployment informer exists (the list below says get/list/watch);
+- added `TestManagerRoleCoversClusterReaderRole`: nexus updates the
+  cluster-reader binding without `bind`, so its role must hold every rule of
+  that role.
 
 ## Code
 

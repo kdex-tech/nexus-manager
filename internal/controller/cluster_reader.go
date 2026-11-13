@@ -101,11 +101,24 @@ func deploymentServiceAccount(d *appsv1.Deployment) string {
 // is an error, never a guess.
 func (r *KDexHostReconciler) hostManagerServiceAccount(ctx context.Context, host *kdexv1alpha1.KDexHost) (string, error) {
 	key := client.ObjectKey{Namespace: host.Namespace, Name: host.Name}
-	d := &appsv1.Deployment{}
-	if err := r.reader().Get(ctx, key, d); err != nil {
+	d, err := r.hostManagerDeployment(ctx, key)
+	if err != nil {
 		return "", fmt.Errorf("failed to read Deployment %s to grant its ServiceAccount cluster reads: %w", key, err)
 	}
 	return deploymentServiceAccount(d), nil
+}
+
+// hostManagerDeployment reads the host-manager Deployment live. Never through
+// the cached client: its first Get would start a cluster-wide Deployment
+// informer -- every Deployment in the cluster, held in nexus's heap -- that
+// nothing watches (host readiness is polled), and nexus's role grants
+// deployments get only.
+func (r *KDexHostReconciler) hostManagerDeployment(ctx context.Context, key client.ObjectKey) (*appsv1.Deployment, error) {
+	d := &appsv1.Deployment{}
+	if err := r.reader().Get(ctx, key, d); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // grantHostManagerServiceAccount runs after a successful host-manager install:

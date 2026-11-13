@@ -593,8 +593,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	// 2. Deployment Status
 	// Since we are using Helm, we'll query the deployment created by Helm.
-	deployment := &appsv1.Deployment{}
-	err = r.Get(ctx, req.NamespacedName, deployment)
+	deployment, err := r.hostManagerDeployment(ctx, req.NamespacedName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			kdexv1alpha1.SetConditions(
@@ -695,6 +694,12 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Live reads (reader) must never fall back to the cached client: nexus's
+	// role cannot list what they read (deployments, namespaces), so a cached
+	// Get would start an informer that never syncs.
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	if os.Getenv("ENABLE_WEBHOOKS") != FALSE {
 		err := ctrl.NewWebhookManagedBy(mgr, &kdexv1alpha1.KDexHost{}).
 			WithDefaulter(&nexuswebhook.KDexHostDefaulter[*kdexv1alpha1.KDexHost]{
