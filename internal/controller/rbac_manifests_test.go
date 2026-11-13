@@ -49,19 +49,21 @@ func stripTemplating(src string) string {
 	return strings.Join(out, "\n")
 }
 
-func loadRBAC(t *testing.T, path string, strip bool) rbacObject {
-	t.Helper()
+// loadManifest decodes the manifest at path into obj, any chart templating
+// lines stripped (config/ manifests have none).
+func loadManifest(path string, obj any) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		return err
 	}
-	src := string(b)
-	if strip {
-		src = stripTemplating(src)
-	}
+	return yaml.Unmarshal([]byte(stripTemplating(string(b))), obj)
+}
+
+func loadRBAC(t *testing.T, path string) rbacObject {
+	t.Helper()
 	var o rbacObject
-	if err := yaml.Unmarshal([]byte(src), &o); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	if err := loadManifest(path, &o); err != nil {
+		t.Fatalf("load %s: %v", path, err)
 	}
 	return o
 }
@@ -82,7 +84,7 @@ func rbacFiles(t *testing.T) map[string]rbacObject {
 		if filepath.Base(f) == "kustomization.yaml" {
 			continue
 		}
-		o := loadRBAC(t, f, false)
+		o := loadRBAC(t, f)
 		if slices.Contains(rbacKinds, o.Kind) {
 			out[filepath.Base(f)] = o
 		}
@@ -96,7 +98,7 @@ func TestChartRBACMatchesConfig(t *testing.T) {
 		t.Fatal("no RBAC manifests found in config/rbac")
 	}
 	for name, want := range cfg {
-		got := loadRBAC(t, filepath.Join(repoRoot, "chart/templates/rbac", name), true)
+		got := loadRBAC(t, filepath.Join(repoRoot, "chart/templates/rbac", name))
 		if got.Kind != want.Kind {
 			t.Errorf("%s: chart kind %q != config kind %q", name, got.Kind, want.Kind)
 		}
@@ -286,5 +288,40 @@ func TestNoHostManagerClusterRoleEnv(t *testing.T) {
 	}
 	if strings.Contains(string(b), "HOST_MANAGER_CLUSTER_ROLE") {
 		t.Error("chart manager.yaml still sets HOST_MANAGER_CLUSTER_ROLE")
+	}
+}
+
+// nexus updates the cluster-reader binding's subjects without bind on its
+// ClusterRole, which the RBAC escalation check allows only while nexus itself
+// holds every rule of that role. A rule added there alone would refuse every
+// grant and heal; bind would instead let any rule added there be granted to
+// any subject. So the manager role must cover the reader role.
+func TestManagerRoleCoversClusterReaderRole(t *testing.T) {
+	files := rbacFiles(t)
+	manager, reader := files["role.yaml"], files["cluster_reader_role.yaml"]
+	if manager.Kind == "" || reader.Kind == "" {
+		t.Fatal("role.yaml or cluster_reader_role.yaml missing")
+	}
+	// Only rules over whole resources cover the reader's.
+	var whole []rbacRule
+	for _, rule := range manager.Rules {
+		if len(rule.ResourceNames) == 0 {
+			whole = append(whole, rule)
+		}
+	}
+	for _, rule := range reader.Rules {
+		if len(rule.ResourceNames) != 0 {
+			t.Fatalf("cluster reader rule %+v is name-scoped: extend this test", rule)
+		}
+		for _, group := range rule.APIGroups {
+			for _, resource := range rule.Resources {
+				held := ruleVerbs(whole, group, resource)
+				for _, verb := range rule.Verbs {
+					if !slices.Contains(held, verb) {
+						t.Errorf("manager role lacks %s %s/%s, which the cluster reader grants", verb, group, resource)
+					}
+				}
+			}
+		}
 	}
 }

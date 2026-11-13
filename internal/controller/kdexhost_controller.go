@@ -385,6 +385,10 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		log.Error(err, "failed to ensure the host-manager cluster-reader subject", "host", host.Name, "namespace", host.Namespace)
 	}
 
+	if disabled, res, err := r.revokeInstallerIfNotEnabled(ctx, &host); disabled {
+		return res, err
+	}
+
 	utilityPageRefs, consentUnresolved, shouldReturn, r1, err := r.resolveUtilityPages(ctx, &host)
 	if shouldReturn {
 		log.Info("resolveUtilityPages requested return", "requeueAfter", r1.RequeueAfter, "err", err)
@@ -694,6 +698,12 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KDexHostReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Live reads (reader) must never fall back to the cached client: nexus's
+	// role cannot list what they read (deployments, namespaces), so a cached
+	// Get would start an informer that never syncs.
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	if os.Getenv("ENABLE_WEBHOOKS") != FALSE {
 		err := ctrl.NewWebhookManagedBy(mgr, &kdexv1alpha1.KDexHost{}).
 			WithDefaulter(&nexuswebhook.KDexHostDefaulter[*kdexv1alpha1.KDexHost]{

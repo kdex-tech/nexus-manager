@@ -1097,13 +1097,7 @@ func (r *KDexHostReconciler) pruneCompanionCharts(helmClient utils.HelmClientInt
 // release the operator did install: the spec's author could have let the
 // install succeed and then forged one.
 func (r *KDexHostReconciler) uninstallCompanionCharts(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) error {
-	recorded, ok := companionRecord(host)
-	if !ok {
-		// Deleted before any reconcile could seed the record (installed before
-		// it existed, or status lost): the spec is the only account left.
-		recorded = specCompanionRecord(host, hostReleases)
-	}
-	owned, _, err := ownedCompanions(helmClient, host, recorded, hostReleases, log)
+	owned, err := teardownCompanions(helmClient, host, hostReleases, log)
 	if err != nil {
 		return err
 	}
@@ -1153,6 +1147,19 @@ func ownedCompanions(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KD
 		owned = append(owned, releaseName)
 	}
 	return owned, labelled, nil
+}
+
+// teardownCompanions lists the companions a teardown of host uninstalls (see
+// uninstallCompanionCharts).
+func teardownCompanions(helmClient utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, hostReleases map[string]struct{}, log logr.Logger) ([]string, error) {
+	recorded, ok := companionRecord(host)
+	if !ok {
+		// Deleted before any reconcile could seed the record (installed before
+		// it existed, or status lost): the spec is the only account left.
+		recorded = specCompanionRecord(host, hostReleases)
+	}
+	owned, _, err := ownedCompanions(helmClient, host, recorded, hostReleases, log)
+	return owned, err
 }
 
 // companionRecord reads AttributeCompanionReleases, and reports whether the

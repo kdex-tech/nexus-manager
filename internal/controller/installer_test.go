@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -22,6 +23,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var (
@@ -598,18 +600,50 @@ func TestTeardown_NamespaceNotEnabledAndNoReleaseFinalizes(t *testing.T) {
 	assertFinalized(t, fc)
 }
 
-// A host that owns a release in a namespace whose label was removed since is
-// still uninstalled through the installer it already has.
-func TestTeardown_NamespaceNotEnabledStillUninstallsWhatTheHostOwns(t *testing.T) {
+// A namespace whose label was removed is disabled: a host there that owns a
+// release keeps its finalizer, its releases untouched, until an administrator
+// labels the namespace again -- and the installer left from before is revoked,
+// not used.
+func TestTeardown_NamespaceNotEnabledKeepsWhatTheHostOwns(t *testing.T) {
 	r, fc, mock := newTeardownFixture(t)
 	disableNamespace(t, fc, "ns")
 	deleteHost(t, fc, "my-host")
 
-	if err := reconcileTeardown(t, r); err != nil {
+	err := reconcileTeardown(t, r)
+	var refusal *refusalError
+	if !errors.As(err, &refusal) || refusal.reason != ConditionReasonNamespaceNotEnabled {
+		t.Fatalf("Reconcile = %v, want a %s refusal", err, ConditionReasonNamespaceNotEnabled)
+	}
+	if len(mock.calls) != 0 {
+		t.Errorf("Uninstall calls = %v in a disabled namespace, want none", mock.calls)
+	}
+	if h := getHost(t, fc, "my-host"); !controllerutil.ContainsFinalizer(h, hostFinalizerName) {
+		t.Error("finalizer removed while the host still owns a release")
+	}
+	assertInstallerGone(t, fc)
+}
+
+// Every pass checks the label: in a namespace without it, the installer left
+// from before is revoked and the host says why, while what it installed runs on.
+func TestReconcile_NamespaceNotEnabledRevokesTheInstaller(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	r.RequeueDelay = time.Minute
+	disableNamespace(t, fc, "ns")
+	key := types.NamespacedName{Namespace: "ns", Name: "my-host"}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !slices.Contains(mock.calls, "my-host") {
-		t.Errorf("Uninstall calls = %v, want my-host", mock.calls)
+	if res.RequeueAfter == 0 {
+		t.Error("a disabled host is not rechecked: no Namespace watch would wake it once labelled")
 	}
-	assertFinalized(t, fc)
+	assertInstallerGone(t, fc)
+	if len(mock.calls) != 0 {
+		t.Errorf("Uninstall calls = %v, want none: a disabled namespace's releases run on", mock.calls)
+	}
+	cond := meta.FindStatusCondition(getHost(t, fc, "my-host").Status.Conditions, string(kdexv1alpha1.ConditionTypeReady))
+	if cond == nil || cond.Reason != string(ConditionReasonNamespaceNotEnabled) {
+		t.Errorf("Ready condition = %v, want reason %s", cond, ConditionReasonNamespaceNotEnabled)
+	}
 }

@@ -150,7 +150,6 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
-  - kcnas-operator-host-manager-cluster-reader
   - kcnas-operator-installer
   resources:
   - clusterroles

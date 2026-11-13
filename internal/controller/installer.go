@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"slices"
 
 	"github.com/go-logr/logr"
@@ -12,8 +13,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -25,11 +28,13 @@ const (
 	ManagedByOperator = "kcnas-operator"
 
 	// LabelHostNamespace, set to HostNamespaceEnabled on a namespace by an
-	// administrator, enables it for KDex hosts: nexus bootstraps the installer
-	// nowhere else, and the chart's ValidatingAdmissionPolicy
-	// (installer_binding_policy.yaml) refuses any RoleBinding to the installer
-	// ClusterRole elsewhere, whoever asks -- so a stolen nexus token cannot
-	// grant the installer's rights in kube-system or any other namespace.
+	// administrator, enables it for KDex hosts. nexus bootstraps the installer
+	// nowhere else and revokes one it finds in a namespace without the label
+	// (revokeInstallerIfNotEnabled); the chart's ValidatingAdmissionPolicy
+	// (config/rbac/fixed/installer_namespace_policy.yaml, and its chart copy)
+	// refuses any RoleBinding to the installer ClusterRole elsewhere, whoever
+	// asks -- so a stolen nexus token cannot grant the installer's rights in
+	// kube-system or any other namespace.
 	LabelHostNamespace   = "kdex.dev/host-namespace"
 	HostNamespaceEnabled = "true"
 
@@ -87,6 +92,34 @@ func namespaceNotEnabled(namespace string) error {
 		namespace, LabelHostNamespace, HostNamespaceEnabled)
 }
 
+// revokeInstallerIfNotEnabled checks, live on every pass, that the host's
+// namespace is enabled for hosts. In one that is not -- never labelled, or
+// unlabelled since -- it deletes the installer this operator made there (the
+// admission policy only gates new bindings, so one from before would
+// otherwise keep its rights), marks the host NamespaceNotEnabled, and ends the
+// pass: nothing more is installed, and nothing installed is touched. No
+// Namespace watch exists, so the host is rechecked after RequeueDelay.
+func (r *KDexHostReconciler) revokeInstallerIfNotEnabled(ctx context.Context, host *kdexv1alpha1.KDexHost) (disabled bool, res ctrl.Result, err error) {
+	terminating, enabled, err := r.namespaceState(ctx, host.Namespace)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if enabled || terminating {
+		return false, ctrl.Result{}, nil
+	}
+	kdexv1alpha1.SetConditions(
+		&host.Status.Conditions,
+		kdexv1alpha1.ConditionStatuses{
+			Degraded:    metav1.ConditionTrue,
+			Progressing: metav1.ConditionFalse,
+			Ready:       metav1.ConditionFalse,
+		},
+		ConditionReasonNamespaceNotEnabled,
+		namespaceNotEnabled(host.Namespace).Error(),
+	)
+	return true, ctrl.Result{RequeueAfter: r.RequeueDelay}, r.deleteInstallerObjects(ctx, host.Namespace)
+}
+
 // ensureInstaller bootstraps the namespace's installer identity: the
 // ServiceAccount utils.InstallerServiceAccountName and a RoleBinding granting
 // it installerClusterRoleName, both labelled as this operator's. Neither has
@@ -111,7 +144,8 @@ func (r *KDexHostReconciler) ensureInstaller(ctx context.Context, namespace stri
 }
 
 // ensureInstallerObjects is ensureInstaller for a caller that has already
-// found the namespace not terminating: one pass makes one decision, so a
+// found the namespace not terminating and enabled for hosts: one pass makes
+// one decision, so a
 // namespace that starts terminating after it fails the creates, and the next
 // pass sees it terminating.
 func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespace string) error {
@@ -271,7 +305,12 @@ func (r *KDexHostReconciler) releaseInstallerIfUnused(ctx context.Context, names
 			return nil
 		}
 	}
+	return r.deleteInstallerObjects(ctx, namespace)
+}
 
+// deleteInstallerObjects deletes the namespace's installer RoleBinding and
+// ServiceAccount, where this operator made them. Idempotent.
+func (r *KDexHostReconciler) deleteInstallerObjects(ctx context.Context, namespace string) error {
 	var errs []error
 	for _, o := range []struct {
 		name string
@@ -326,18 +365,27 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	return r.releaseInstallerIfUnused(ctx, host.Namespace, host.Name)
 }
 
-// hostOwnsReleases reports whether any release in c's namespace is host's:
-// its host-manager release, or a companion labelled for it. It lists release
-// metadata as nexus, so it needs no installer.
-func hostOwnsReleases(c utils.HelmClientInterface, host string) (bool, error) {
+// hostOwnsReleases reports whether host's teardown would uninstall anything
+// in its namespace: its host-manager release, or a companion
+// (teardownCompanions). It lists release metadata as nexus, so it needs no
+// installer. Only Helm's Secret driver is listable: under any other it fails
+// closed and reports that the host owns releases, rather than orphan them.
+func (r *KDexHostReconciler) hostOwnsReleases(ctx context.Context, c utils.HelmClientInterface, host *kdexv1alpha1.KDexHost, log logr.Logger) (bool, error) {
+	if d := os.Getenv("HELM_DRIVER"); d != "" && d != "secret" {
+		return true, nil
+	}
 	names, err := c.ListReleases(nil)
 	if err != nil {
 		return false, err
 	}
-	if slices.Contains(names, host) {
+	if slices.Contains(names, host.Name) {
 		return true, nil
 	}
-	companions, err := c.ListReleases(map[string]string{LabelCompanionOf: host})
+	hostReleases, err := r.kdexHostNames(ctx, host.Namespace)
+	if err != nil {
+		return false, err
+	}
+	companions, err := teardownCompanions(c, host, hostReleases, log)
 	return len(companions) != 0, err
 }
 
@@ -361,12 +409,12 @@ func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kd
 		return err
 	}
 	if !enabled {
-		// The installer may not be bootstrapped here. A host refused before it
-		// installed anything has nothing to uninstall and must not keep its
-		// finalizer for want of an installer it never needed; one that owns a
-		// release goes on, and an installer that must be (re)created is
-		// refused, for an administrator to label the namespace.
-		owns, err := hostOwnsReleases(c, host.Name)
+		// A namespace without the label is disabled: no installer acts in it.
+		// A host refused before it installed anything has nothing to
+		// uninstall and must not keep its finalizer for want of one; a host
+		// that owns a release keeps it until an administrator labels the
+		// namespace again (decommission: delete the hosts, then the label).
+		owns, err := r.hostOwnsReleases(ctx, c, host, log)
 		if err != nil {
 			return err
 		}
@@ -374,11 +422,9 @@ func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kd
 			log.V(1).Info("namespace not enabled for hosts and the host owns no release; nothing to uninstall", "host", host.Name, "namespace", host.Namespace)
 			return nil
 		}
+		return errors.Join(namespaceNotEnabled(host.Namespace), r.deleteInstallerObjects(ctx, host.Namespace))
 	}
 	if err := r.ensureInstallerObjects(ctx, host.Namespace); err != nil {
-		if !enabled {
-			return errors.Join(namespaceNotEnabled(host.Namespace), err)
-		}
 		return err
 	}
 

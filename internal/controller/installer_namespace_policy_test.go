@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kdex-tech/nexus-manager/internal/utils"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -20,25 +21,15 @@ import (
 
 const installerNamespacePolicy = "installer_namespace_policy"
 
-// loadManifest decodes a config/ or chart/ manifest into obj, the chart's
-// templating lines stripped.
-func loadManifest(path string, obj any) error {
-	b, err := os.ReadFile(filepath.Join(repoRoot, path))
-	if err != nil {
-		return err
-	}
-	return yaml.Unmarshal([]byte(stripTemplating(string(b))), obj)
-}
-
 // The chart ships the policy config/ declares, and both name the label and
 // the installer role the code uses.
 func TestInstallerNamespacePolicy_ChartMatchesConfig(t *testing.T) {
 	for _, f := range []string{installerNamespacePolicy, installerNamespacePolicy + "_binding"} {
 		var cfg, chart map[string]any
-		if err := loadManifest("config/rbac/fixed/"+f+".yaml", &cfg); err != nil {
+		if err := loadManifest(filepath.Join(repoRoot, "config/rbac/fixed", f+".yaml"), &cfg); err != nil {
 			t.Fatal(err)
 		}
-		if err := loadManifest("chart/templates/rbac/"+f+".yaml", &chart); err != nil {
+		if err := loadManifest(filepath.Join(repoRoot, "chart/templates/rbac", f+".yaml"), &chart); err != nil {
 			t.Fatal(err)
 		}
 		c, _ := yaml.Marshal(map[string]any{"kind": cfg["kind"], "name": cfg["metadata"].(map[string]any)["name"], "spec": cfg["spec"]})
@@ -51,9 +42,11 @@ func TestInstallerNamespacePolicy_ChartMatchesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{LabelHostNamespace, installerClusterRoleName, "'" + HostNamespaceEnabled + "'"} {
-		if !strings.Contains(string(raw), want) {
-			t.Errorf("policy does not name %q", want)
+	// The CEL string literals, quoted, so a name merely contained in another
+	// (the policy's own name contains the role's) does not count.
+	for _, want := range []string{LabelHostNamespace, installerClusterRoleName, HostNamespaceEnabled, utils.InstallerServiceAccountName, kindClusterRole} {
+		if !strings.Contains(string(raw), "'"+want+"'") {
+			t.Errorf("policy has no CEL literal '%s'", want)
 		}
 	}
 }
@@ -64,9 +57,9 @@ func TestInstallerNamespacePolicy_ChartMatchesConfig(t *testing.T) {
 var _ = Describe("The installer namespace policy", func() {
 	It("admits installer bindings only in enabled namespaces, for the installer only", func(ctx SpecContext) {
 		policy := &admissionregistrationv1.ValidatingAdmissionPolicy{}
-		Expect(loadManifest("config/rbac/fixed/"+installerNamespacePolicy+".yaml", policy)).To(Succeed())
+		Expect(loadManifest(filepath.Join(repoRoot, "config/rbac/fixed", installerNamespacePolicy+".yaml"), policy)).To(Succeed())
 		binding := &admissionregistrationv1.ValidatingAdmissionPolicyBinding{}
-		Expect(loadManifest("config/rbac/fixed/"+installerNamespacePolicy+"_binding.yaml", binding)).To(Succeed())
+		Expect(loadManifest(filepath.Join(repoRoot, "config/rbac/fixed", installerNamespacePolicy+"_binding.yaml"), binding)).To(Succeed())
 		Expect(k8sClient.Create(ctx, policy)).To(Succeed())
 		DeferCleanup(func(ctx SpecContext) { Expect(k8sClient.Delete(ctx, policy)).To(Succeed()) })
 		Expect(k8sClient.Create(ctx, binding)).To(Succeed())
@@ -88,7 +81,7 @@ var _ = Describe("The installer namespace policy", func() {
 			}
 		}
 		installerOf := func(ns string) rbacv1.Subject {
-			return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: "kdex-installer", Namespace: ns}
+			return rbacv1.Subject{Kind: rbacv1.ServiceAccountKind, Name: utils.InstallerServiceAccountName, Namespace: ns}
 		}
 
 		// The policy takes effect asynchronously: wait until it refuses.

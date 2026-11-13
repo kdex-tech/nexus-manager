@@ -1,4 +1,11 @@
-{{- if .Values.rbac.enable }}
+# A RoleBinding to the installer ClusterRole, whoever writes it, must sit in a
+# namespace an administrator enabled for KDex hosts (labelled
+# kdex.dev/host-namespace=true) and bind exactly that namespace's
+# kdex-installer ServiceAccount. nexus can bind the installer role anywhere
+# (bind by resourceNames), so without this a stolen nexus token could grant
+# the installer's rights in kube-system or any namespace holding a privileged
+# ServiceAccount. Deletes are not matched: removing a binding only drops rights.
+# Rendered whatever .Values.rbac.enable says: an admission control, not a grant.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -41,4 +48,3 @@ spec:
       object.subjects[0].namespace == namespaceObject.metadata.name
     message: a RoleBinding to kcnas-operator-installer must bind exactly its namespace's kdex-installer ServiceAccount
     reason: Forbidden
-{{- end -}}

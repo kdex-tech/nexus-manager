@@ -57,11 +57,14 @@ package controller
 // fixed installer ClusterRole. The fixed cluster-reader ClusterRoleBinding's
 // subject list is maintained, and the binding is watched through an informer
 // field-selected on metadata.name (cache_options.go), which needs list;watch.
-// bind on each ClusterRole lets nexus write its bindings without holding the
-// role's rules itself (the RBAC escalation check), so a rule added to either
-// role never needs a matching grant here.
+// bind on the installer ClusterRole lets nexus write installer bindings
+// without holding its (aggregated, changing) rules; the admission policy
+// installer_namespace_policy.yaml confines where. The cluster-reader binding
+// gets no bind: nexus may update its subjects only because it holds every rule
+// of that role itself (TestManagerRoleCoversClusterReaderRole), so no rule
+// beyond nexus's own can ever be granted through it.
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,resourceNames=kdex-installer,verbs=impersonate
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer;kcnas-operator-host-manager-cluster-reader,verbs=bind
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer,verbs=bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=kcnas-operator-host-manager-cluster-reader,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get

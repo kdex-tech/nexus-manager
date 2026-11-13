@@ -1,4 +1,4 @@
-{{- if .Values.rbac.enable }}
+# Rendered whatever .Values.rbac.enable says: an admission control, not a grant.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
@@ -9,4 +9,3 @@ spec:
   policyName: kcnas-operator-installer-namespaces
   validationActions:
   - Deny
-{{- end -}}

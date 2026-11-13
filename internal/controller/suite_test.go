@@ -213,7 +213,10 @@ var _ = BeforeSuite(func() {
 	// The suite's hosts live in "default": enable it for hosts.
 	defaultNS := &corev1.Namespace{}
 	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: namespace}, defaultNS)).To(Succeed())
-	defaultNS.Labels = map[string]string{LabelHostNamespace: HostNamespaceEnabled}
+	if defaultNS.Labels == nil {
+		defaultNS.Labels = map[string]string{}
+	}
+	defaultNS.Labels[LabelHostNamespace] = HostNamespaceEnabled
 	Expect(k8sClient.Update(ctx, defaultNS)).To(Succeed())
 
 	k8sManager, err := manager.New(cfg, manager.Options{

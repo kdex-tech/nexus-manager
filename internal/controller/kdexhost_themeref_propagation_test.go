@@ -7,6 +7,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -30,7 +31,7 @@ var _ = Describe("KDexHost spec propagation with unresolved ThemeRef", func() {
 		})
 
 		AfterEach(func() {
-			ns := hostNamespace(testNamespace)
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
 			_ = k8sClient.Delete(ctx, ns)
 		})
 
