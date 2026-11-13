@@ -51,15 +51,6 @@ func (m *concurrencyTrackingHelmClient) ListReleases(map[string]string) ([]strin
 	return nil, nil
 }
 
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-// ReleaseStatus: no release has a recorded status.
-func (m *concurrencyTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
-
-// DropClusterRBACFromRecord: no record lists cluster-scoped RBAC.
-func (m *concurrencyTrackingHelmClient) DropClusterRBACFromRecord(string) ([]string, error) {
-	return nil, nil
-}
-
 // TestHelmRenderConcurrencyIsBounded verifies that no more than
 // HelmRenderConcurrency in-process Helm renders run simultaneously, regardless
 // of how many hosts dispatch renders at once. See issue #24.
@@ -170,15 +161,6 @@ func (m *pruneTrackingHelmClient) InstallOrUpgrade(_ *utils.ChartSpec) error {
 // One owned release, never declared by any host.
 func (m *pruneTrackingHelmClient) ListReleases(map[string]string) ([]string, error) {
 	return []string{"orphaned-companion"}, nil
-}
-
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-// ReleaseStatus: no release has a recorded status.
-func (m *pruneTrackingHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
-
-// DropClusterRBACFromRecord: no record lists cluster-scoped RBAC.
-func (m *pruneTrackingHelmClient) DropClusterRBACFromRecord(string) ([]string, error) {
-	return nil, nil
 }
 
 func (m *pruneTrackingHelmClient) Uninstall(string) error {

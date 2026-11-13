@@ -1,196 +1,64 @@
 package controller
 
-// release B: drop create;update;patch;delete (nexus only reads Deployments)
-// +kubebuilder:rbac:groups=apps,resources=deployments,                                 verbs=get;list;watch;create;update;patch;delete
-// release B: drop (replicasets: nothing reads them)
-// +kubebuilder:rbac:groups=apps,resources=replicasets,                                 verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=batch,resources=jobs,                                       verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,                                   verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror / companions)
-// +kubebuilder:rbac:groups=core,resources=configmaps,                                  verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror / companions)
-// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,                      verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror; nexus reads no Pod)
-// +kubebuilder:rbac:groups=core,resources=pods,                                        verbs=get;list;watch
-// release B: drop create;update;patch;delete (nexus only reads Secrets)
-// +kubebuilder:rbac:groups=core,resources=secrets,                                     verbs=get;list;watch;create;update;patch;delete
-// release B: drop patch (the installer bootstrap uses get;list;watch;create;update;delete)
-// +kubebuilder:rbac:groups=core,resources=serviceaccounts,                             verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror / companions)
-// +kubebuilder:rbac:groups=core,resources=services,                                    verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,                  verbs=get;list;watch
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,             verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,               verbs=get;list;watch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps,                                verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps/finalizers,                     verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,                                 verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=secrets,                                     verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=serviceaccounts,                             verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps,                                verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps/status,                         verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterapps,                         verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterapps/finalizers,              verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterapps,                         verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterapps/status,                  verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterfaasadaptors,                 verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterfaasadaptors/finalizers,      verbs=update
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterfaasadaptors/status,          verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagearchetypes,               verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagearchetypes/finalizers,    verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterfaasadaptors,                 verbs=get;list;watch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagearchetypes,               verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagearchetypes/status,        verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagefooters,                  verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagefooters/finalizers,       verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagefooters,                  verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagefooters/status,           verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpageheaders,                  verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpageheaders/finalizers,       verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpageheaders,                  verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpageheaders/status,           verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagenavigations,              verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagenavigations/finalizers,   verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagenavigations,              verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterpagenavigations/status,       verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterscriptlibraries,              verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterscriptlibraries/finalizers,   verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterscriptlibraries,              verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterscriptlibraries/status,       verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterthemes,                       verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterthemes/finalizers,            verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterthemes,                       verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterthemes/status,                verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclustertranslations,                 verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclustertranslations/finalizers,      verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclustertranslations,                 verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclustertranslations/status,          verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterutilitypages,                 verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterutilitypages/finalizers,      verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterutilitypages,                 verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexclusterutilitypages/status,          verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfaasadaptors,                        verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfaasadaptors/status,                 verbs=get;update;patch
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfaasadaptors/finalizers,             verbs=update
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfunctions,                           verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfunctions/status,                    verbs=get;update;patch
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfunctions/finalizers,                verbs=update
-// release B: drop create;delete (nexus updates/patches hosts for its finalizer only)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts,                               verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfaasadaptors,                        verbs=get;list;watch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexfunctions,                           verbs=get;list;watch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts,                               verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts/finalizers,                    verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts/status,                        verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalhosts,                       verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalhosts/finalizers,            verbs=update
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalhosts/status,                verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus does not write it)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalpackagereferences,           verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalpackagereferences/finalizers,verbs=update
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalpackagereferences/status,    verbs=get;update;patch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalpackagereferences,           verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternaltranslations,                verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternaltranslations/finalizers,     verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternaltranslations/status,         verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalutilitypages,                verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalutilitypages/finalizers,     verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalutilitypages/status,         verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagearchetypes,                      verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagearchetypes/finalizers,           verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagearchetypes,                      verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagearchetypes/status,               verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpages,                        verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpages/finalizers,             verbs=update
-// release B: drop (nexus writes no status of this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpages/status,                 verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagefooters,                         verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagefooters/finalizers,              verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpages,                               verbs=get;list;watch
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagefooters,                         verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagefooters/status,                  verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpageheaders,                         verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpageheaders/finalizers,              verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpageheaders,                         verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexpageheaders/status,                  verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagenavigations,                     verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagenavigations/finalizers,          verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagenavigations,                     verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexpagenavigations/status,              verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus does not write it; verify anything still reads it)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexrolebindings,                        verbs=get;list;watch;create;update;patch;delete
-// release B: drop create;update;patch;delete (nexus does not write it; verify anything still reads it)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexroles,                               verbs=get;list;watch;create;update;patch;delete
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexscriptlibraries,                     verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexscriptlibraries/finalizers,          verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexscriptlibraries,                     verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexscriptlibraries/status,              verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexthemes,                              verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexthemes/finalizers,                   verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexthemes,                              verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexthemes/status,                       verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations,                        verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations/finalizers,             verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations,                        verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdextranslations/status,                 verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions,                       verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions/finalizers,            verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions,                       verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions/status,                verbs=get;update;patch
-// release B: drop create;update;patch;delete (nexus writes only its status)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages,                        verbs=get;list;watch;create;update;patch;delete
-// release B: drop (nexus sets no finalizer on this kind)
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages/finalizers,             verbs=update
+// +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages,                        verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages/status,                 verbs=get;update;patch
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=kpack.io,resources=images,                                  verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=kpack.io,resources=images/finalizers,                       verbs=update
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=kpack.io,resources=images/status,                           verbs=get;update;patch
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,                      verbs=get;list;watch;create;update;patch;delete
-// release B: drop (legacy RBAC cleanup only; keep the resourceNames line below, adding list;watch for the cluster-reader watch)
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,    verbs=get;list;watch;create;update;patch;delete
-// release B: drop (legacy RBAC cleanup only; keep the resourceNames bind line below)
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,           verbs=get;list;watch;create;update;patch;delete
-// release B: drop (escalation mirror)
-// +kubebuilder:rbac:groups=serving.knative.dev,resources=services,                     verbs=get;list;watch;create;update;patch;delete
 // Privilege redesign: the per-namespace installer SA is impersonated for Helm,
 // bound to the fixed installer ClusterRole, and the fixed cluster-reader
 // ClusterRoleBinding's subject list is maintained.
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,resourceNames=kdex-installer,verbs=impersonate
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer,verbs=bind
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=kcnas-operator-host-manager-cluster-reader,verbs=get;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=kcnas-operator-host-manager-cluster-reader,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get

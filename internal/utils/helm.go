@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,20 +23,14 @@ import (
 	"helm.sh/helm/v4/pkg/getter"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
-	rspb "helm.sh/helm/v4/pkg/release/v1"
-	releaseutil "helm.sh/helm/v4/pkg/release/v1/util"
 	"helm.sh/helm/v4/pkg/storage/driver"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/rest"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"oras.land/oras-go/v2/registry/remote/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/yaml"
 )
 
 const (
@@ -117,11 +109,6 @@ type ChartSpec struct {
 type HelmClientInterface interface {
 	InstallOrUpgrade(spec *ChartSpec) error
 	ListReleases(matchLabels map[string]string) ([]string, error)
-	// Migration code: delete in release B (privilege-redesign follow-up issue).
-	// The legacy RBAC upgrade proof's release status, and the teardown's
-	// record rewrite.
-	ReleaseStatus(releaseName string) (string, error)
-	DropClusterRBACFromRecord(releaseName string) ([]string, error)
 	Uninstall(releaseName string) error
 }
 
@@ -376,130 +363,6 @@ func (h *HelmClient) locateChart(spec *ChartSpec, load func() (string, error)) (
 	}
 	key := chartPathKey(spec.ChartName, spec.Version, HashSecrets(h.secrets))
 	return sharedChartPaths.get(key, load)
-}
-
-// latestRevision reads the release's latest revision from storage, nil for a
-// release that does not exist.
-//
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-func (h *HelmClient) latestRevision(releaseName string) (*rspb.Release, error) {
-	last, err := h.actionConfig.Releases.Last(releaseName)
-	if errors.Is(err, driver.ErrReleaseNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to read the record of release %s: %w", releaseName, err)
-	}
-	switch rel := last.(type) {
-	case *rspb.Release:
-		return rel, nil
-	case rspb.Release:
-		return &rel, nil
-	default:
-		return nil, fmt.Errorf("failed to read the record of release %s: unsupported release type %T", releaseName, last)
-	}
-}
-
-// ReleaseStatus is the status of the release's latest revision ("deployed",
-// "failed", "pending-upgrade", ...), or "" for a release that does not exist.
-// It reads storage without the client's lock, as Uninstall does: a read must
-// not wait out an install in progress.
-//
-// Migration code: delete in release B (privilege-redesign follow-up issue). Only the
-// legacy RBAC upgrade proof (hostManagerUpgraded) reads it.
-func (h *HelmClient) ReleaseStatus(releaseName string) (string, error) {
-	rel, err := h.latestRevision(releaseName)
-	if err != nil || rel == nil || rel.Info == nil {
-		return "", err
-	}
-	return string(rel.Info.Status), nil
-}
-
-// DropClusterRBACFromRecord rewrites the manifest of the release's latest
-// revision -- the record an uninstall acts on -- without its ClusterRole and
-// ClusterRoleBinding documents and without any list-typed document, and
-// returns what it dropped ("Kind/name"). A record with nothing to drop is not
-// written; a release that does not exist has nothing to drop.
-//
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-// A pre-redesign host-manager release lists its legacy ClusterRole and
-// ClusterRoleBinding, which the installer -- the only identity a HelmClient
-// has -- is Forbidden to delete, so its uninstall would fail. nexus deletes
-// the legacy objects itself (verified by UID and Helm ownership annotations,
-// never from this record) and then drops them from the record here, so the
-// installer's uninstall does not trip over what is already gone.
-//
-// This is no authorization: the record is a Secret whoever writes Secrets in
-// the namespace can forge, before or after this rewrite, and the uninstall
-// that follows can do only what the installer may. List-typed documents go
-// too because Helm's uninstall flattens them -- a document whose top-level
-// kind is ClusterRole can carry an items list of anything -- and nothing a
-// host-manager chart renders is one. Every other document stays: one the
-// installer cannot delete (a cluster-scoped kind, another namespace) fails the
-// uninstall closed, which keeps the host's finalizer for an administrator.
-// Each document is classified with the unstructured decoder Helm's resource
-// builder uses; one that does not decode is kept, and fails the uninstall's
-// build in turn.
-func (h *HelmClient) DropClusterRBACFromRecord(releaseName string) ([]string, error) {
-	rel, err := h.latestRevision(releaseName)
-	if err != nil || rel == nil {
-		return nil, err
-	}
-	docs := releaseutil.SplitManifests(rel.Manifest)
-	keys := slices.Collect(maps.Keys(docs))
-	sort.Sort(releaseutil.BySplitManifestsOrder(keys))
-
-	var kept strings.Builder
-	var dropped []string
-	for _, k := range keys {
-		if what, drop := clusterRBACOrList(docs[k]); drop {
-			dropped = append(dropped, what)
-			continue
-		}
-		kept.WriteString("---\n")
-		kept.WriteString(docs[k])
-		kept.WriteString("\n")
-	}
-	if len(dropped) == 0 {
-		return nil, nil
-	}
-	rel.Manifest = kept.String()
-	// Helm's Secrets driver sends no resourceVersion on Update, so this is an
-	// unconditional overwrite of whatever the record holds now. Acceptable:
-	// it runs only in teardown, immediately before the uninstall that purges
-	// the release.
-	if err := h.actionConfig.Releases.Update(rel); err != nil {
-		return nil, fmt.Errorf("failed to rewrite the record of release %s: %w", releaseName, err)
-	}
-	return dropped, nil
-}
-
-// clusterRBACOrList decodes one manifest document as Helm's resource builder
-// does and reports whether DropClusterRBACFromRecord drops it, naming it when
-// it does.
-//
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-func clusterRBACOrList(doc string) (string, bool) {
-	raw, err := yaml.YAMLToJSON([]byte(doc))
-	if err != nil {
-		return "", false
-	}
-	obj, gvk, err := unstructured.UnstructuredJSONScheme.Decode(raw, nil, nil)
-	if err != nil || gvk == nil {
-		return "", false
-	}
-	name := ""
-	if o, ok := obj.(metav1.Object); ok {
-		name = o.GetName()
-	}
-	what := gvk.Kind + "/" + name
-	switch {
-	case meta.IsListType(obj), strings.HasSuffix(gvk.Kind, "List"):
-		return what, true
-	case gvk.Group == rbacv1.GroupName && (gvk.Kind == "ClusterRole" || gvk.Kind == "ClusterRoleBinding"):
-		return what, true
-	}
-	return "", false
 }
 
 // Uninstall uninstalls a Helm release, running none of its hooks. A release

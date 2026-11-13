@@ -129,8 +129,3 @@ func TestHelmClientCache_DeleteForgetsTheHost(t *testing.T) {
 		t.Fatalf("deleteHelmClient left %d clients", len(r.helmClients))
 	}
 }
-
-// Migration code: delete in release B (privilege-redesign follow-up issue).
-func (s *stubHelmClient) ReleaseStatus(string) (string, error) { return "", nil }
-
-func (s *stubHelmClient) DropClusterRBACFromRecord(string) ([]string, error) { return nil, nil }

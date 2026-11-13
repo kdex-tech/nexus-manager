@@ -1,5 +1,9 @@
 # Release B: privilege-redesign cleanup
 
+**Status: done** in nexus-manager v0.9.0 (kdex-tech/nexus-manager#65). Kept as
+the record of what was removed and why. Upgrading from a release before v0.8.0
+must pass through v0.8.x first: only v0.8.x migrates the legacy RBAC.
+
 Release A (the privilege redesign) migrates every host from the cluster-scoped
 host-manager RBAC (`ClusterRole/<host>`, `ClusterRoleBinding/<host>-<namespace>`)
 to the namespaced RBAC the host-manager chart now renders. It keeps all of

@@ -15,7 +15,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
@@ -33,16 +32,6 @@ const (
 	// installerRoleBindingName names the installer RoleBinding after the
 	// ServiceAccount it binds.
 	installerRoleBindingName = utils.InstallerServiceAccountName
-
-	// legacyInstallerFinalizer is the finalizer earlier builds of this
-	// branch put on the installer RoleBinding. It protected almost nothing
-	// -- reconciles are serialized and teardown is synchronous -- and a
-	// rollback to an operator that does not know it would leave it in every
-	// host namespace, holding namespace deletion. ensureInstallerObjects
-	// removes it wherever it finds it; nothing adds it.
-	//
-	// Migration code: delete in release B (privilege-redesign follow-up issue).
-	legacyInstallerFinalizer = "kdex.dev/installer"
 
 	// kindClusterRole is the kind a roleRef names a ClusterRole by.
 	kindClusterRole = "ClusterRole"
@@ -83,7 +72,7 @@ func (r *KDexHostReconciler) namespaceTerminating(ctx context.Context, namespace
 // an owner or a finalizer: several hosts may share the namespace, so no one
 // host owns them (releaseInstallerIfUnused removes them after the last), and
 // a namespace deletion must never wait on them. Idempotent; an existing
-// object is healed (label, subjects, legacyInstallerFinalizer removed). In a
+// object is healed (label, subjects). In a
 // terminating namespace it creates nothing and returns
 // errNamespaceTerminating.
 func (r *KDexHostReconciler) ensureInstaller(ctx context.Context, namespace string) error {
@@ -123,9 +112,6 @@ func (r *KDexHostReconciler) ensureInstallerObjects(ctx context.Context, namespa
 				return false, fmt.Errorf("it binds %s %q, not ClusterRole %q", rb.RoleRef.Kind, rb.RoleRef.Name, installerClusterRoleName)
 			}
 			changed := ensureLabels(rb)
-			if controllerutil.RemoveFinalizer(rb, legacyInstallerFinalizer) {
-				changed = true
-			}
 			// Exactly the installer: an added subject would borrow its grant.
 			if !slices.Equal(rb.Subjects, subjects) {
 				rb.Subjects = subjects
@@ -290,8 +276,7 @@ func (r *KDexHostReconciler) releaseInstallerIfUnused(ctx context.Context, names
 	return errors.Join(errs...)
 }
 
-// teardownHost removes everything a terminating host owns, in order: any
-// legacy cluster-scoped RBAC, which no namespace deletion removes; its Helm
+// teardownHost removes everything a terminating host owns, in order: its Helm
 // releases, unless the namespace is terminating -- its deletion removes them,
 // and refuses the installer bootstrap an uninstall needs; then the
 // cluster-reader subject recorded for it; then the namespace's installer, if
@@ -302,18 +287,6 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	if err != nil {
 		return err
 	}
-	// Migration code: delete in release B (privilege-redesign follow-up issue).
-	// nexus deletes the host's legacy RBAC itself -- matched by UID and Helm
-	// ownership, never by the release record -- before the uninstall, which
-	// then no longer needs to.
-	role, binding, err := r.legacyRBAC(ctx, host)
-	if err != nil {
-		return err
-	}
-	if err := r.deleteLegacyRBAC(ctx, role, binding); err != nil {
-		return err
-	}
-
 	if terminating {
 		log.V(1).Info("namespace is terminating; its deletion removes the host's releases", "host", host.Name, "namespace", host.Namespace)
 	} else if err := r.uninstallHostReleases(ctx, host, secrets, log); err != nil {
@@ -352,19 +325,7 @@ func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kd
 	}
 
 	var uninstallErrs []error
-	// Migration code: delete in release B (privilege-redesign follow-up issue).
-	// A pre-redesign record still lists the legacy RBAC teardownHost has just
-	// deleted, which the installer may not delete: drop it from the record so
-	// the uninstall does not fail on it.
-	dropped, err := c.DropClusterRBACFromRecord(host.Name)
-	if len(dropped) != 0 {
-		log.Info("dropped cluster-scoped RBAC from the host-manager release record before uninstalling it",
-			"host", host.Name, "namespace", host.Namespace, "dropped", dropped)
-	}
-	if err == nil {
-		err = c.Uninstall(host.Name)
-	}
-	if err != nil {
+	if err := c.Uninstall(host.Name); err != nil {
 		log.Error(err, "failed to uninstall host manager release", "name", host.Name)
 		uninstallErrs = append(uninstallErrs, err)
 	}

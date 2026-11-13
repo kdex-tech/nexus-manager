@@ -26,11 +26,8 @@ var _ = Describe("Helm client impersonating the installer", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Without a grant the server refuses the installer by name: the call
-		// reached it, impersonating.
-		//
-		// Migration code: delete in release B (privilege-redesign follow-up issue).
-		// Probe with Uninstall("absent") instead, here and below.
-		_, err = installer.ReleaseStatus("absent")
+		// reached it, impersonating. Uninstall reads the release history first.
+		err = installer.Uninstall("absent")
 		Expect(err).To(HaveOccurred())
 		Expect(apierrors.IsForbidden(err)).To(BeTrue(), "want Forbidden, got %v", err)
 		Expect(err.Error()).To(ContainSubstring(utils.InstallerUser(ns)))
@@ -46,11 +43,7 @@ var _ = Describe("Helm client impersonating the installer", func() {
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: utils.InstallerServiceAccountName, Namespace: ns}},
 		})).To(Succeed())
 		Eventually(func() error {
-			status, err := installer.ReleaseStatus("absent")
-			if err == nil && status != "" {
-				return fmt.Errorf("status %q of a release that does not exist", status)
-			}
-			return err
+			return installer.Uninstall("absent")
 		}, "10s", "100ms").Should(Succeed())
 	})
 })
