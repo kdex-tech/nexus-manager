@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/kdex-tech/nexus-manager/internal/utils"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -100,4 +102,10 @@ func (h *hookedHelmClient) Attempted() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.attempted)
+}
+
+// hostNamespace is a namespace an administrator enabled for KDex hosts.
+func hostNamespace(name string) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name,
+		Labels: map[string]string{LabelHostNamespace: HostNamespaceEnabled}}}
 }

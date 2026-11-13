@@ -46,7 +46,7 @@ func newHelmReconciler(t *testing.T, mock utils.HelmClientInterface, funcs *inte
 	// hosts live in namespace "ns".
 	objs := []client.Object{
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns"}},
+		hostNamespace("ns"),
 	}
 	for _, h := range hosts {
 		objs = append(objs, h)

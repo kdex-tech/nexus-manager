@@ -76,7 +76,7 @@ func TestHelmRenderConcurrencyIsBounded(t *testing.T) {
 	}
 	objs := []client.Object{
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		hostNamespace("default"),
 	}
 	for i := 0; i < numHosts; i++ {
 		objs = append(objs, &kdexv1alpha1.KDexHost{
@@ -200,7 +200,7 @@ func TestRenderSlotIsReleasedBeforeThePrune(t *testing.T) {
 	}
 	objs := []client.Object{
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterReaderBindingName}},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		hostNamespace("default"),
 	}
 	for i := range numHosts {
 		// The Deployment the host-manager chart renders: the cluster-reader

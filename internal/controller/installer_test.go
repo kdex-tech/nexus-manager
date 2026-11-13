@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -287,8 +288,8 @@ func TestEnsureInstaller_NamespaceTerminatingCreatesNothing(t *testing.T) {
 	if !apierrors.IsNotFound(fc.Get(context.Background(), installerSAKey, &corev1.ServiceAccount{})) {
 		t.Error("a ServiceAccount was created in a terminating namespace")
 	}
-	if got, err := r.namespaceTerminating(context.Background(), "ns"); err != nil || !got {
-		t.Errorf("namespaceTerminating = %v, %v; want true", got, err)
+	if got, _, err := r.namespaceState(context.Background(), "ns"); err != nil || !got {
+		t.Errorf("namespaceState terminating = %v, %v; want true", got, err)
 	}
 }
 
@@ -506,7 +507,7 @@ func TestCacheOptions_LabelSelectedRBACKinds(t *testing.T) {
 var _ = Describe("Installer bootstrap through the label-selected cache", func() {
 	It("refuses an unlabelled ServiceAccount the cache cannot see, and never deletes it", func() {
 		ns := "installer-unlabelled"
-		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+		Expect(k8sClient.Create(ctx, hostNamespace(ns))).To(Succeed())
 		Expect(k8sClient.Create(ctx, &corev1.ServiceAccount{
 			ObjectMeta: metav1.ObjectMeta{Name: "kdex-installer", Namespace: ns},
 		})).To(Succeed())
@@ -519,7 +520,7 @@ var _ = Describe("Installer bootstrap through the label-selected cache", func() 
 
 	It("creates both objects, finds them through the cache, and releases them", func() {
 		ns := "installer-lifecycle"
-		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})).To(Succeed())
+		Expect(k8sClient.Create(ctx, hostNamespace(ns))).To(Succeed())
 
 		Expect(hostReconciler.ensureInstaller(ctx, ns)).To(Succeed())
 		Expect(hostReconciler.ensureInstaller(ctx, ns)).To(Succeed())
@@ -540,3 +541,75 @@ var _ = Describe("Installer bootstrap through the label-selected cache", func() 
 		}).Should(BeTrue())
 	})
 })
+
+// disableNamespace removes the host-namespace label from ns.
+func disableNamespace(t *testing.T, c client.Client, ns string) {
+	t.Helper()
+	n := &corev1.Namespace{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: ns}, n); err != nil {
+		t.Fatal(err)
+	}
+	delete(n.Labels, LabelHostNamespace)
+	if err := c.Update(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A namespace no administrator enabled gets no installer: the bootstrap is
+// refused under its own reason, naming the label, and creates nothing.
+func TestEnsureInstaller_NamespaceNotEnabledCreatesNothing(t *testing.T) {
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
+	disableNamespace(t, fc, "ns")
+	err := r.ensureInstaller(context.Background(), "ns")
+	var refusal *refusalError
+	if !errors.As(err, &refusal) || refusal.reason != ConditionReasonNamespaceNotEnabled {
+		t.Fatalf("ensureInstaller = %v, want a %s refusal", err, ConditionReasonNamespaceNotEnabled)
+	}
+	if !strings.Contains(err.Error(), LabelHostNamespace) {
+		t.Errorf("refusal %q does not name the label", err)
+	}
+	if !apierrors.IsNotFound(fc.Get(context.Background(), installerSAKey, &corev1.ServiceAccount{})) {
+		t.Error("a ServiceAccount was created in a namespace not enabled for hosts")
+	}
+	if !apierrors.IsNotFound(fc.Get(context.Background(), installerRBKey, &rbacv1.RoleBinding{})) {
+		t.Error("a RoleBinding was created in a namespace not enabled for hosts")
+	}
+}
+
+// A host refused for its namespace never installed anything: deleting it
+// must not wait for an installer the namespace may not get.
+func TestTeardown_NamespaceNotEnabledAndNoReleaseFinalizes(t *testing.T) {
+	host := helmHost("my-host")
+	host.Finalizers = []string{hostFinalizerName}
+	mock := &uninstallCountingHelmClient{MockHelmClient: NewMockHelmClient(nil)}
+	r, fc := newHelmReconciler(t, mock, nil, host)
+	disableNamespace(t, fc, "ns")
+	deleteHost(t, fc, "my-host")
+
+	if err := reconcileTeardown(t, r); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Errorf("Uninstall called for %v, want none: the host owns no release", mock.calls)
+	}
+	if !apierrors.IsNotFound(fc.Get(context.Background(), installerRBKey, &rbacv1.RoleBinding{})) {
+		t.Error("teardown bootstrapped an installer in a namespace not enabled for hosts")
+	}
+	assertFinalized(t, fc)
+}
+
+// A host that owns a release in a namespace whose label was removed since is
+// still uninstalled through the installer it already has.
+func TestTeardown_NamespaceNotEnabledStillUninstallsWhatTheHostOwns(t *testing.T) {
+	r, fc, mock := newTeardownFixture(t)
+	disableNamespace(t, fc, "ns")
+	deleteHost(t, fc, "my-host")
+
+	if err := reconcileTeardown(t, r); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !slices.Contains(mock.calls, "my-host") {
+		t.Errorf("Uninstall calls = %v, want my-host", mock.calls)
+	}
+	assertFinalized(t, fc)
+}

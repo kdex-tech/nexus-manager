@@ -5,3 +5,5 @@ resources:
 - installer_base_role.yaml
 - cluster_reader_role.yaml
 - cluster_reader_role_binding.yaml
+- installer_namespace_policy.yaml
+- installer_namespace_policy_binding.yaml

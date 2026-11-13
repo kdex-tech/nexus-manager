@@ -7,7 +7,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -32,7 +31,7 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 			originalConfig = snapshotConfiguration()
 
 			testNamespace = fmt.Sprintf("test-helm-defaults-%d", time.Now().UnixNano())
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
+			ns := hostNamespace(testNamespace)
 			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 		})
 
@@ -42,7 +41,7 @@ var _ = Describe("KDexHost Helm chart-value defaults", func() {
 			// Reset the client to avoid leaking the mock to other tests
 
 			setSuiteHelmClient(nil)
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
+			ns := hostNamespace(testNamespace)
 			_ = k8sClient.Delete(ctx, ns)
 		})
 

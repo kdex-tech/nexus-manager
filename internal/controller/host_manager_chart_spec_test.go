@@ -334,3 +334,29 @@ func TestReconcile_KeepsTheHelmRunsRefusalReason(t *testing.T) {
 		})
 	}
 }
+
+// The host-manager Deployment is read live: a Get through the cached client
+// would start a cluster-wide Deployment informer that nexus's role (deployments
+// get only) refuses to list.
+func TestHostManagerDeployment_ReadsLiveNeverTheCache(t *testing.T) {
+	host := helmHost("my-host")
+	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil, host)
+	if err := fc.Create(context.Background(), &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "my-host"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.APIReader = fc
+	r.Client = interceptor.NewClient(fc.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				t.Errorf("Deployment %s read through the cached client", key)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	d, err := r.hostManagerDeployment(context.Background(), client.ObjectKey{Namespace: "ns", Name: "my-host"})
+	if err != nil || d.Name != "my-host" {
+		t.Fatalf("hostManagerDeployment = %v, %v", d, err)
+	}
+}

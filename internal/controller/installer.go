@@ -24,6 +24,15 @@ const (
 	LabelManagedBy    = "app.kubernetes.io/managed-by"
 	ManagedByOperator = "kcnas-operator"
 
+	// LabelHostNamespace, set to HostNamespaceEnabled on a namespace by an
+	// administrator, enables it for KDex hosts: nexus bootstraps the installer
+	// nowhere else, and the chart's ValidatingAdmissionPolicy
+	// (installer_binding_policy.yaml) refuses any RoleBinding to the installer
+	// ClusterRole elsewhere, whoever asks -- so a stolen nexus token cannot
+	// grant the installer's rights in kube-system or any other namespace.
+	LabelHostNamespace   = "kdex.dev/host-namespace"
+	HostNamespaceEnabled = "true"
+
 	// installerClusterRoleName is the fixed, aggregated ClusterRole the nexus
 	// chart ships for the installer; each namespace's installer RoleBinding
 	// grants it in that namespace only.
@@ -42,6 +51,10 @@ const (
 // operator did not create.
 const ConditionReasonInstallerConflict kdexv1alpha1.ConditionReason = "InstallerConflict"
 
+// ConditionReasonNamespaceNotEnabled is the reason on a host whose namespace
+// is not labelled LabelHostNamespace=HostNamespaceEnabled.
+const ConditionReasonNamespaceNotEnabled kdexv1alpha1.ConditionReason = "NamespaceNotEnabled"
+
 // errNamespaceTerminating stops installer bootstrap in a namespace being
 // deleted, which rejects creates. It wraps errHostTerminating: every host in
 // the namespace is about to be torn down, so a helm operation that meets it
@@ -52,18 +65,26 @@ func installerLabels() map[string]string {
 	return map[string]string{LabelManagedBy: ManagedByOperator}
 }
 
-// namespaceTerminating reports whether the namespace is being deleted, read
-// live so no Namespace informer starts. A namespace that is gone counts as
-// terminating: nothing can be created in it and nothing is left to uninstall.
-func (r *KDexHostReconciler) namespaceTerminating(ctx context.Context, namespace string) (bool, error) {
+// namespaceState reports whether the namespace is being deleted and whether
+// it is enabled for hosts (LabelHostNamespace), read live so no Namespace
+// informer starts. A namespace that is gone counts as terminating: nothing can
+// be created in it and nothing is left to uninstall.
+func (r *KDexHostReconciler) namespaceState(ctx context.Context, namespace string) (terminating, enabled bool, err error) {
 	ns := &corev1.Namespace{}
 	if err := r.reader().Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
 		if apierrors.IsNotFound(err) {
-			return true, nil
+			return true, false, nil
 		}
-		return false, fmt.Errorf("failed to read namespace %q: %w", namespace, err)
+		return false, false, fmt.Errorf("failed to read namespace %q: %w", namespace, err)
 	}
-	return !ns.DeletionTimestamp.IsZero(), nil
+	return !ns.DeletionTimestamp.IsZero(), ns.Labels[LabelHostNamespace] == HostNamespaceEnabled, nil
+}
+
+// namespaceNotEnabled refuses a host in a namespace no administrator enabled.
+func namespaceNotEnabled(namespace string) error {
+	return refused(ConditionReasonNamespaceNotEnabled,
+		"namespace %q is not labelled %s=%s: an administrator enables a namespace for KDex hosts by labelling it, and nexus installs nothing elsewhere",
+		namespace, LabelHostNamespace, HostNamespaceEnabled)
 }
 
 // ensureInstaller bootstraps the namespace's installer identity: the
@@ -72,16 +93,19 @@ func (r *KDexHostReconciler) namespaceTerminating(ctx context.Context, namespace
 // an owner or a finalizer: several hosts may share the namespace, so no one
 // host owns them (releaseInstallerIfUnused removes them after the last), and
 // a namespace deletion must never wait on them. Idempotent; an existing
-// object is healed (label, subjects). In a
-// terminating namespace it creates nothing and returns
-// errNamespaceTerminating.
+// object is healed (label, subjects). In a terminating namespace it creates
+// nothing and returns errNamespaceTerminating; in one not enabled for hosts it
+// creates nothing and refuses (ConditionReasonNamespaceNotEnabled).
 func (r *KDexHostReconciler) ensureInstaller(ctx context.Context, namespace string) error {
-	terminating, err := r.namespaceTerminating(ctx, namespace)
+	terminating, enabled, err := r.namespaceState(ctx, namespace)
 	if err != nil {
 		return err
 	}
 	if terminating {
 		return fmt.Errorf("cannot bootstrap the installer in %q: %w", namespace, errNamespaceTerminating)
+	}
+	if !enabled {
+		return namespaceNotEnabled(namespace)
 	}
 	return r.ensureInstallerObjects(ctx, namespace)
 }
@@ -283,13 +307,13 @@ func (r *KDexHostReconciler) releaseInstallerIfUnused(ctx context.Context, names
 // no other live host needs it. Every step is idempotent, so a pass that fails
 // part-way is redone whole by the next.
 func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) error {
-	terminating, err := r.namespaceTerminating(ctx, host.Namespace)
+	terminating, enabled, err := r.namespaceState(ctx, host.Namespace)
 	if err != nil {
 		return err
 	}
 	if terminating {
 		log.V(1).Info("namespace is terminating; its deletion removes the host's releases", "host", host.Name, "namespace", host.Namespace)
-	} else if err := r.uninstallHostReleases(ctx, host, secrets, log); err != nil {
+	} else if err := r.uninstallHostReleases(ctx, host, secrets, enabled, log); err != nil {
 		return err
 	}
 
@@ -302,25 +326,59 @@ func (r *KDexHostReconciler) teardownHost(ctx context.Context, host *kdexv1alpha
 	return r.releaseInstallerIfUnused(ctx, host.Namespace, host.Name)
 }
 
+// hostOwnsReleases reports whether any release in c's namespace is host's:
+// its host-manager release, or a companion labelled for it. It lists release
+// metadata as nexus, so it needs no installer.
+func hostOwnsReleases(c utils.HelmClientInterface, host string) (bool, error) {
+	names, err := c.ListReleases(nil)
+	if err != nil {
+		return false, err
+	}
+	if slices.Contains(names, host) {
+		return true, nil
+	}
+	companions, err := c.ListReleases(map[string]string{LabelCompanionOf: host})
+	return len(companions) != 0, err
+}
+
 // uninstallHostReleases uninstalls the host-manager release and every
 // companion the host owns, impersonating the namespace's installer -- the only
 // identity a Helm client has, so a forged release record can act with no more
 // than the installer's namespace-bounded rights; one listing anything else
 // fails the uninstall closed, and the host keeps its finalizer. Its caller has
-// found the namespace not terminating. It bootstraps the installer first: a
-// host deleted before any helm run created it, or after a sibling's teardown
-// released it, would otherwise be refused every uninstall and hold its
-// finalizer forever.
+// found the namespace not terminating, and whether it is enabled for hosts: in
+// one that is not, a host that owns no release is done. It bootstraps the
+// installer first: a host deleted before any helm run created it, or after a
+// sibling's teardown released it, would otherwise be refused every uninstall
+// and hold its finalizer forever.
 //
 // Both uninstalls are attempted before any failure is returned, so one
 // blocked release does not strand the others; retrying is safe, since
 // uninstalling a release that is already gone succeeds.
-func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, log logr.Logger) error {
-	if err := r.ensureInstallerObjects(ctx, host.Namespace); err != nil {
-		return err
-	}
+func (r *KDexHostReconciler) uninstallHostReleases(ctx context.Context, host *kdexv1alpha1.KDexHost, secrets kdexv1alpha1.Secrets, enabled bool, log logr.Logger) error {
 	c, err := r.getOrCreateHelmClient(host.Name, host.Namespace, secrets, log.WithName("helm"))
 	if err != nil {
+		return err
+	}
+	if !enabled {
+		// The installer may not be bootstrapped here. A host refused before it
+		// installed anything has nothing to uninstall and must not keep its
+		// finalizer for want of an installer it never needed; one that owns a
+		// release goes on, and an installer that must be (re)created is
+		// refused, for an administrator to label the namespace.
+		owns, err := hostOwnsReleases(c, host.Name)
+		if err != nil {
+			return err
+		}
+		if !owns {
+			log.V(1).Info("namespace not enabled for hosts and the host owns no release; nothing to uninstall", "host", host.Name, "namespace", host.Namespace)
+			return nil
+		}
+	}
+	if err := r.ensureInstallerObjects(ctx, host.Namespace); err != nil {
+		if !enabled {
+			return errors.Join(namespaceNotEnabled(host.Namespace), err)
+		}
 		return err
 	}
 

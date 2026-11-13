@@ -7,7 +7,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kdexv1alpha1 "kdex.dev/crds/api/v1alpha1"
@@ -28,11 +27,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 
 			// Create a unique namespace for each test
 			testNamespace = fmt.Sprintf("test-config-%d", time.Now().UnixNano())
-			ns := &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: testNamespace,
-				},
-			}
+			ns := hostNamespace(testNamespace)
 			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 		})
 
@@ -43,7 +38,7 @@ var _ = Describe("KDexHost Configuration Change Integration", func() {
 			setSuiteHelmClient(nil)
 
 			// Delete the namespace
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}
+			ns := hostNamespace(testNamespace)
 			_ = k8sClient.Delete(ctx, ns)
 		})
 

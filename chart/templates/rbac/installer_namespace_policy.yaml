@@ -1,0 +1,44 @@
+{{- if .Values.rbac.enable }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  labels:
+    {{- include "kcnas-operator.labels" . | nindent 4 }}
+  name: kcnas-operator-installer-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - rbac.authorization.k8s.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - rolebindings
+  matchConditions:
+  - name: binds-the-installer-role
+    expression: >-
+      object.roleRef.kind == 'ClusterRole' &&
+      object.roleRef.name == 'kcnas-operator-installer'
+  validations:
+  - expression: >-
+      has(namespaceObject.metadata.labels) &&
+      'kdex.dev/host-namespace' in namespaceObject.metadata.labels &&
+      namespaceObject.metadata.labels['kdex.dev/host-namespace'] == 'true'
+    messageExpression: >-
+      'namespace ' + namespaceObject.metadata.name +
+      ' is not labelled kdex.dev/host-namespace=true: an administrator enables
+      a namespace for KDex hosts by labelling it'
+    reason: Forbidden
+  - expression: >-
+      has(object.subjects) && object.subjects.size() == 1 &&
+      object.subjects[0].kind == 'ServiceAccount' &&
+      object.subjects[0].name == 'kdex-installer' &&
+      has(object.subjects[0].namespace) &&
+      object.subjects[0].namespace == namespaceObject.metadata.name
+    message: a RoleBinding to kcnas-operator-installer must bind exactly its namespace's kdex-installer ServiceAccount
+    reason: Forbidden
+{{- end -}}

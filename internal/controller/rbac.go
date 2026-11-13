@@ -1,6 +1,6 @@
 package controller
 
-// +kubebuilder:rbac:groups=apps,resources=deployments,                                 verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,                                 verbs=get
 // +kubebuilder:rbac:groups=core,resources=secrets,                                     verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,                             verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexapps,                                verbs=get;list;watch

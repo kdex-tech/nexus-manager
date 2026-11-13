@@ -46,8 +46,6 @@ rules:
   - deployments
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - kdex.dev
   resources:

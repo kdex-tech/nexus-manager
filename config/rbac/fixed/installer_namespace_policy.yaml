@@ -1,0 +1,49 @@
+# A RoleBinding to the installer ClusterRole, whoever writes it, must sit in a
+# namespace an administrator enabled for KDex hosts (labelled
+# kdex.dev/host-namespace=true) and bind exactly that namespace's
+# kdex-installer ServiceAccount. nexus can bind the installer role anywhere
+# (bind by resourceNames), so without this a stolen nexus token could grant
+# the installer's rights in kube-system or any namespace holding a privileged
+# ServiceAccount. Deletes are not matched: removing a binding only drops rights.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kcnas-operator
+  name: kcnas-operator-installer-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:
+      - rbac.authorization.k8s.io
+      apiVersions:
+      - '*'
+      operations:
+      - CREATE
+      - UPDATE
+      resources:
+      - rolebindings
+  matchConditions:
+  - name: binds-the-installer-role
+    expression: >-
+      object.roleRef.kind == 'ClusterRole' &&
+      object.roleRef.name == 'kcnas-operator-installer'
+  validations:
+  - expression: >-
+      has(namespaceObject.metadata.labels) &&
+      'kdex.dev/host-namespace' in namespaceObject.metadata.labels &&
+      namespaceObject.metadata.labels['kdex.dev/host-namespace'] == 'true'
+    messageExpression: >-
+      'namespace ' + namespaceObject.metadata.name +
+      ' is not labelled kdex.dev/host-namespace=true: an administrator enables
+      a namespace for KDex hosts by labelling it'
+    reason: Forbidden
+  - expression: >-
+      has(object.subjects) && object.subjects.size() == 1 &&
+      object.subjects[0].kind == 'ServiceAccount' &&
+      object.subjects[0].name == 'kdex-installer' &&
+      has(object.subjects[0].namespace) &&
+      object.subjects[0].namespace == namespaceObject.metadata.name
+    message: a RoleBinding to kcnas-operator-installer must bind exactly its namespace's kdex-installer ServiceAccount
+    reason: Forbidden

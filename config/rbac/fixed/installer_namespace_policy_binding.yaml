@@ -1,0 +1,10 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kcnas-operator
+  name: kcnas-operator-installer-namespaces
+spec:
+  policyName: kcnas-operator-installer-namespaces
+  validationActions:
+  - Deny

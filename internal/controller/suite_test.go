@@ -208,8 +208,13 @@ var _ = BeforeSuite(func() {
 	namespace = "default"
 	secondNamespace = "second-namespace"
 
-	ns2 := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: secondNamespace}}
+	ns2 := hostNamespace(secondNamespace)
 	Expect(k8sClient.Create(ctx, ns2)).To(Succeed())
+	// The suite's hosts live in "default": enable it for hosts.
+	defaultNS := &corev1.Namespace{}
+	Expect(k8sClient.Get(ctx, client.ObjectKey{Name: namespace}, defaultNS)).To(Succeed())
+	defaultNS.Labels = map[string]string{LabelHostNamespace: HostNamespaceEnabled}
+	Expect(k8sClient.Update(ctx, defaultNS)).To(Succeed())
 
 	k8sManager, err := manager.New(cfg, manager.Options{
 		Cache: CacheOptions(),

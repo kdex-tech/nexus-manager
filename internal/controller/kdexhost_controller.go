@@ -593,8 +593,7 @@ func (r *KDexHostReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 
 	// 2. Deployment Status
 	// Since we are using Helm, we'll query the deployment created by Helm.
-	deployment := &appsv1.Deployment{}
-	err = r.Get(ctx, req.NamespacedName, deployment)
+	deployment, err := r.hostManagerDeployment(ctx, req.NamespacedName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			kdexv1alpha1.SetConditions(

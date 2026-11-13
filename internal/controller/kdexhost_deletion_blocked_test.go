@@ -72,7 +72,7 @@ func TestBlockedDeletionSurfacesTheReasonInStatus(t *testing.T) {
 	}
 
 	fc := withHostIndexes(fake.NewClientBuilder().WithScheme(scheme)).
-		WithObjects(host, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}).
+		WithObjects(host, hostNamespace("default")).
 		WithStatusSubresource(&kdexv1alpha1.KDexHost{}).
 		Build()
 
