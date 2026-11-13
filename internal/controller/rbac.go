@@ -30,7 +30,6 @@ package controller
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts/finalizers,                    verbs=update
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhosts/status,                        verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalhosts,                       verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalpackagereferences,           verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternaltranslations,                verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternaltranslations/status,         verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexinternalutilitypages,                verbs=get;list;watch;create;update;patch;delete
@@ -54,11 +53,15 @@ package controller
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexhostextensions/status,                verbs=get;update;patch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages,                        verbs=get;list;watch
 // +kubebuilder:rbac:groups=kdex.dev,resources=kdexutilitypages/status,                 verbs=get;update;patch
-// Privilege redesign: the per-namespace installer SA is impersonated for Helm,
-// bound to the fixed installer ClusterRole, and the fixed cluster-reader
-// ClusterRoleBinding's subject list is maintained.
+// The per-namespace installer SA is impersonated for Helm and bound to the
+// fixed installer ClusterRole. The fixed cluster-reader ClusterRoleBinding's
+// subject list is maintained, and the binding is watched through an informer
+// field-selected on metadata.name (cache_options.go), which needs list;watch.
+// bind on each ClusterRole lets nexus write its bindings without holding the
+// role's rules itself (the RBAC escalation check), so a rule added to either
+// role never needs a matching grant here.
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,resourceNames=kdex-installer,verbs=impersonate
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer,verbs=bind
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=kcnas-operator-installer;kcnas-operator-host-manager-cluster-reader,verbs=bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,resourceNames=kcnas-operator-host-manager-cluster-reader,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get

@@ -6,24 +6,25 @@ must pass through v0.8.x first: only v0.8.x migrates the legacy RBAC.
 
 Release A (the privilege redesign) migrates every host from the cluster-scoped
 host-manager RBAC (`ClusterRole/<host>`, `ClusterRoleBinding/<host>-<namespace>`)
-to the namespaced RBAC the host-manager chart now renders. It keeps all of
-nexus's pre-existing grants and carries migration code. Release B deletes both,
-once infra confirms no legacy object remains on any cluster:
+to the namespaced RBAC the host-manager chart now renders. It kept all of
+nexus's pre-existing grants and carried migration code. Release B deleted both,
+once infra confirmed no legacy object remained on any cluster (2026-11-12):
 
 ```sh
 kubectl get clusterrolebinding,clusterrole -l app.kubernetes.io/name=host-manager
 # must print nothing, on every cluster
 ```
 
-Every code site below is marked with the comment
-`// Migration code: delete in release B (privilege-redesign follow-up issue).`
--- on the symbol, or on the block or fixture line to delete
-(`rg 'Migration code: delete in release B'` lists them) -- except the doc
-comments to edit, which this page names as such. A marker on a type or a
-group may cover several symbols; its comment names them. Every RBAC marker to
-drop carries a `// release B: drop ...` comment above it in
-`internal/controller/rbac.go`. When the follow-up issue is filed, replace
-"privilege-redesign follow-up issue" in those comments with its number.
+Before tagging, the fleet was also checked for what the deleted code would
+have handled: no host-manager release's latest revision lists a ClusterRole or
+ClusterRoleBinding, no RoleBinding carries the `kdex.dev/installer` finalizer,
+and no host carries `LegacyRBACPresent`.
+
+The sections below are the removal list as planned (the code markers it
+refers to are gone with the code). Beyond it, release B also dropped the
+read-only `kdexroles`, `kdexrolebindings` and `kdexinternalpackagereferences`
+grants (nothing in nexus reads them) and added `bind` on the cluster-reader
+ClusterRole.
 
 ## Code
 

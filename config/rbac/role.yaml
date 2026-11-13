@@ -62,7 +62,6 @@ rules:
   - kdexfaasadaptors
   - kdexfunctions
   - kdexhostextensions
-  - kdexinternalpackagereferences
   - kdexpagearchetypes
   - kdexpagefooters
   - kdexpageheaders
@@ -150,6 +149,7 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resourceNames:
+  - kcnas-operator-host-manager-cluster-reader
   - kcnas-operator-installer
   resources:
   - clusterroles

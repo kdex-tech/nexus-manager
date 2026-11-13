@@ -138,9 +138,8 @@ func TestEnsureInstaller_Idempotent(t *testing.T) {
 	}
 }
 
-// An installer binding found with a borrowed subject, or the finalizer earlier
-// builds put on it, is healed: it grants the installer and nothing else, and
-// holds no namespace deletion.
+// An installer binding found with a borrowed subject is healed: it grants the
+// installer and nothing else.
 func TestEnsureInstaller_HealsAnExistingBinding(t *testing.T) {
 	r, fc := newHelmReconciler(t, NewMockHelmClient(nil), nil)
 	ctx := context.Background()
@@ -373,7 +372,7 @@ func TestTeardown_NamespaceTerminatingSkipsUninstall(t *testing.T) {
 	if err := fc.Get(context.Background(), key, &kdexv1alpha1.KDexHost{}); !apierrors.IsNotFound(err) {
 		t.Errorf("host get = %v, want it finalized", err)
 	}
-	// The installer's finalizer must not hold the namespace deletion open.
+	// The installer must not hold the namespace deletion open.
 	assertInstallerGone(t, fc)
 }
 
